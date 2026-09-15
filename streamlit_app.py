@@ -6,10 +6,19 @@ local demos, classroom use, and quick deployment on Streamlit Community Cloud.
 
 from datetime import datetime
 import hashlib
+import io
+import json
+import os
 import secrets
 
 import pandas as pd
 import streamlit as st
+import numpy as np
+
+try:
+    import face_recognition
+except ImportError:
+    face_recognition = None
 
 
 st.set_page_config(
@@ -27,6 +36,7 @@ DEMO_ACCOUNTS = {
     "orchard@agridirect.local": ("Farmer", "orchard123", "sunrise"),
     "admin@agridirect.local": ("Admin", "admin123", "admin"),
 }
+FARM_BACKGROUND = "https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=1800"
 
 
 def password_hash(password, salt=None):
@@ -39,6 +49,56 @@ def password_matches(password, stored_hash):
     salt, expected = stored_hash.split("$", 1)
     actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
     return secrets.compare_digest(actual, expected)
+
+
+def cloud_bucket_config():
+    """Return optional S3-compatible bucket settings from Streamlit secrets/env."""
+    try:
+        configured = dict(st.secrets.get("storage", {}))
+    except (FileNotFoundError, KeyError, TypeError):
+        configured = {}
+    return {
+        "bucket": configured.get("bucket") or os.getenv("AGRI_S3_BUCKET"),
+        "region": configured.get("region") or os.getenv("AWS_REGION"),
+    }
+
+
+def save_data_snapshot():
+    """Persist a JSON snapshot when an S3-compatible bucket is configured."""
+    config = cloud_bucket_config()
+    if not config["bucket"]:
+        return False
+    try:
+        import boto3
+        from botocore.exceptions import BotoCoreError, ClientError
+        payload = json.dumps({
+            "products": st.session_state.products,
+            "users": st.session_state.users,
+            "orders": st.session_state.orders,
+        }, default=str).encode()
+        boto3.client("s3", region_name=config["region"]).put_object(
+            Bucket=config["bucket"], Key="agridirect/state.json", Body=payload,
+            ContentType="application/json",
+        )
+        return True
+    except (ImportError, BotoCoreError, ClientError, OSError, ValueError):
+        return False
+
+
+def face_encoding(image_bytes):
+    if face_recognition is None:
+        return None
+    image = face_recognition.load_image_file(io.BytesIO(image_bytes))
+    locations = face_recognition.face_locations(image, model="hog")
+    encodings = face_recognition.face_encodings(image, locations)
+    return encodings[0].tolist() if encodings else None
+
+
+def face_matches(image_bytes, reference):
+    if face_recognition is None or not reference:
+        return False
+    candidate = face_encoding(image_bytes)
+    return bool(candidate and face_recognition.compare_faces([np.array(reference)], np.array(candidate), tolerance=0.48)[0])
 
 
 def seed_state():
@@ -58,7 +118,7 @@ def seed_state():
     st.session_state.setdefault("next_order_id", 1001)
     if "users" not in st.session_state:
         st.session_state.users = {
-            email: {"email": email, "role": role, "username": username, "password": password_hash(password)}
+            email: {"email": email, "role": role, "username": username, "password": password_hash(password), "face_encoding": None}
             for email, (role, password, username) in DEMO_ACCOUNTS.items()
         }
     st.session_state.setdefault("authenticated_user", None)
@@ -72,13 +132,17 @@ def authentication_view():
         with st.form("login-form"):
             email = st.text_input("Email or username", placeholder="you@example.com or greenvalley")
             password = st.text_input("Password", type="password")
+            face_photo = st.camera_input("Face verification (required for enrolled accounts)")
             submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         if submitted:
             login_value = email.strip().lower()
             user = st.session_state.users.get(login_value)
             if not user:
                 user = next((candidate for candidate in st.session_state.users.values() if candidate["username"] == login_value), None)
-            if user and password_matches(password, user["password"]):
+            verified = user and password_matches(password, user["password"])
+            if user and user.get("face_encoding"):
+                verified = bool(face_photo and face_matches(face_photo.getvalue(), user["face_encoding"]))
+            if verified:
                 st.session_state.authenticated_user = user["email"]
                 st.session_state.role = user["role"]
                 st.rerun()
@@ -109,9 +173,10 @@ def authentication_view():
                 st.error("That username is already taken.")
             else:
                 st.session_state.users[normalized_email] = {
-                    "email": normalized_email, "role": account_role, "username": username,
+                    "email": normalized_email, "role": account_role, "username": username, "face_encoding": None,
                     "password": password_hash(new_password),
                 }
+                save_data_snapshot()
                 st.session_state.authenticated_user = normalized_email
                 st.session_state.role = account_role
                 st.success("Account created.")
@@ -125,6 +190,10 @@ def money(value):
 def current_role():
     email = st.session_state.get("authenticated_user")
     return st.session_state.users.get(email, {}).get("role", "Customer")
+
+
+def current_user():
+    return st.session_state.users[st.session_state.authenticated_user]
 
 
 def add_to_cart(product_id, quantity=1):
@@ -241,21 +310,24 @@ def place_order(address, city, pincode, total):
         "address": f"{address}, {city} - {pincode}",
         "status": "Placed",
         "payment": "Cash on Delivery",
+        "owner_email": st.session_state.authenticated_user,
     }
     st.session_state.orders.insert(0, order)
     st.session_state.next_order_id += 1
     for product, quantity in purchased_rows:
         product["stock"] -= quantity
     st.session_state.cart.clear()
+    save_data_snapshot()
     st.success(f"Order #{order['id']} placed successfully! Pay {money(total)} on delivery.")
     st.balloons()
 
 
 def render_orders():
-    if not st.session_state.orders:
+    orders = [order for order in st.session_state.orders if order.get("owner_email") == st.session_state.authenticated_user]
+    if not orders:
         st.info("Your placed orders will appear here.")
         return
-    for order in st.session_state.orders:
+    for order in orders:
         with st.container(border=True):
             columns = st.columns([2, 2, 1])
             columns[0].markdown(f"**Order #{order['id']}**\n\n{order['created']}")
@@ -297,6 +369,7 @@ def farmer_view():
                     "image_url": image_url.strip(),
                 })
                 st.session_state.next_product_id += 1
+                save_data_snapshot()
                 st.success("Your product is now live in the marketplace.")
                 st.rerun()
     st.subheader("Your listings")
@@ -333,6 +406,14 @@ def admin_view():
 
 def main():
     seed_state()
+    st.markdown(
+        f"""<style>
+        .stApp {{ background-image: linear-gradient(rgba(248,252,246,.93), rgba(248,252,246,.96)), url('{FARM_BACKGROUND}');
+                 background-size: cover; background-attachment: fixed; }}
+        [data-testid="stSidebar"] {{ background: rgba(238, 248, 235, .96); }}
+        </style>""",
+        unsafe_allow_html=True,
+    )
     if not st.session_state.authenticated_user:
         authentication_view()
         return
@@ -341,6 +422,31 @@ def main():
     user = st.session_state.users[st.session_state.authenticated_user]
     role = user["role"]
     st.sidebar.success(f"Signed in as @{user['username']}")
+    with st.sidebar.expander("Face ID security"):
+        if face_recognition is None:
+            st.warning("Face verification is unavailable until the optional model dependency is installed.")
+        elif user.get("face_encoding"):
+            st.success("Face verification is enabled. Password alone cannot sign in.")
+            new_face = st.camera_input("Replace enrolled face")
+            if new_face and st.button("Update Face ID"):
+                encoding = face_encoding(new_face.getvalue())
+                if encoding:
+                    user["face_encoding"] = encoding
+                    save_data_snapshot()
+                    st.success("Face ID updated.")
+                else:
+                    st.error("No clear face was detected.")
+        else:
+            st.caption("Enroll your face to require face verification at sign-in.")
+            enrollment = st.camera_input("Capture face for enrollment")
+            if enrollment and st.button("Enable Face ID"):
+                encoding = face_encoding(enrollment.getvalue())
+                if encoding:
+                    user["face_encoding"] = encoding
+                    save_data_snapshot()
+                    st.success("Face ID enabled for this account.")
+                else:
+                    st.error("No clear face was detected. Try better lighting.")
     if role == "Farmer":
         st.session_state.user_email = user["email"]
     else:
