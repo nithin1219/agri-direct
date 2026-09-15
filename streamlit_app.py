@@ -6,10 +6,19 @@ local demos, classroom use, and quick deployment on Streamlit Community Cloud.
 
 from datetime import datetime
 import hashlib
+import json
+import os
 import secrets
 
 import pandas as pd
 import streamlit as st
+
+try:
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+except ImportError:
+    boto3 = None
+    BotoCoreError = ClientError = OSError
 
 
 st.set_page_config(
@@ -27,6 +36,7 @@ DEMO_ACCOUNTS = {
     "orchard@agridirect.local": ("Farmer", "orchard123", "sunrise"),
     "admin@agridirect.local": ("Admin", "admin123", "admin"),
 }
+FARM_BACKGROUND = "https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=1800"
 def password_hash(password, salt=None):
     salt = salt or secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
@@ -37,6 +47,27 @@ def password_matches(password, stored_hash):
     salt, expected = stored_hash.split("$", 1)
     actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
     return secrets.compare_digest(actual, expected)
+
+
+def save_cloud_snapshot():
+    """Best-effort optional S3 snapshot; local session remains the source of truth."""
+    bucket = os.getenv("AGRI_S3_BUCKET")
+    if not bucket or boto3 is None:
+        return
+    try:
+        boto3.client("s3", region_name=os.getenv("AWS_REGION")).put_object(
+            Bucket=bucket,
+            Key="agridirect/state.json",
+            Body=json.dumps({
+                "products": st.session_state.products,
+                "users": st.session_state.users,
+                "orders": st.session_state.orders,
+            }, default=str).encode(),
+            ContentType="application/json",
+        )
+    except (BotoCoreError, ClientError, OSError, ValueError):
+        # Cloud credentials are optional; never make checkout or publishing fail.
+        return
 
 
 def seed_state():
@@ -250,6 +281,7 @@ def place_order(address, city, pincode, total):
     for product, quantity in purchased_rows:
         product["stock"] -= quantity
     st.session_state.cart.clear()
+    save_cloud_snapshot()
     st.success(f"Order #{order['id']} placed successfully! Pay {money(total)} on delivery.")
     st.balloons()
 
@@ -301,6 +333,7 @@ def farmer_view():
                     "image_url": image_url.strip(),
                 })
                 st.session_state.next_product_id += 1
+                save_cloud_snapshot()
                 st.success("Your product is now live in the marketplace.")
                 st.rerun()
     st.subheader("Your listings")
@@ -337,6 +370,17 @@ def admin_view():
 
 def main():
     seed_state()
+    st.markdown(
+        f"""<style>
+        .stApp {{
+            background-image: linear-gradient(rgba(248,252,246,.92), rgba(248,252,246,.96)), url('{FARM_BACKGROUND}');
+            background-size: cover;
+            background-attachment: fixed;
+        }}
+        [data-testid="stSidebar"] {{ background: rgba(238, 248, 235, .96); }}
+        </style>""",
+        unsafe_allow_html=True,
+    )
     if not st.session_state.authenticated_user:
         authentication_view()
         return

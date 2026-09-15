@@ -35,6 +35,7 @@ Open the URL printed by Streamlit (normally `http://localhost:8501`). The app se
 - Farmer product creation and inventory view
 - Admin inventory, order, and session-revenue dashboard
 - Seeded sample data with local `st.session_state` persistence
+- Farm-and-plants visual theme on the public home screen
 
 ### Demo sign-in accounts
 
@@ -49,7 +50,9 @@ The zero-database demo seeds these accounts for local testing:
 
 New customer and farmer accounts can be registered from the sign-in screen. Signed-in farmers can publish listings with price, stock, description, and image URL; those images appear in the customer product cards. Customer orders are scoped to the signed-in account, while farmer listings are scoped to the signed-in farmer.
 
-All data is intentionally local to the current Streamlit browser session. No face recognition, biometric storage, external bucket, or cloud persistence is configured.
+Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. The base app is session-local and deploys without cloud credentials. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
+
+Biometric face recognition is not enabled in the base deployment because native biometric packages can fail Streamlit Cloud builds and require explicit consent, retention, and legal controls. Use the secure username/password FRS login in this deployment, or add a managed identity provider before enabling biometrics.
 
 ## Repository notes
 
