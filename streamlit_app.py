@@ -5,6 +5,8 @@ local demos, classroom use, and quick deployment on Streamlit Community Cloud.
 """
 
 from datetime import datetime
+import hashlib
+import secrets
 
 import pandas as pd
 import streamlit as st
@@ -19,6 +21,23 @@ st.set_page_config(
 
 DELIVERY_FEE = 40
 ORDER_STATUSES = ["Placed", "Confirmed", "Preparing", "Out for delivery", "Delivered"]
+DEMO_ACCOUNTS = {
+    "customer@agridirect.local": ("Customer", "customer123"),
+    "farmer@agridirect.local": ("Farmer", "farmer123"),
+    "admin@agridirect.local": ("Admin", "admin123"),
+}
+
+
+def password_hash(password, salt=None):
+    salt = salt or secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
+    return f"{salt}${digest}"
+
+
+def password_matches(password, stored_hash):
+    salt, expected = stored_hash.split("$", 1)
+    actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
+    return secrets.compare_digest(actual, expected)
 
 
 def seed_state():
@@ -36,6 +55,59 @@ def seed_state():
     st.session_state.setdefault("orders", [])
     st.session_state.setdefault("next_product_id", 7)
     st.session_state.setdefault("next_order_id", 1001)
+    if "users" not in st.session_state:
+        st.session_state.users = {
+            email: {"email": email, "role": role, "password": password_hash(password)}
+            for email, (role, password) in DEMO_ACCOUNTS.items()
+        }
+    st.session_state.setdefault("authenticated_user", None)
+
+
+def authentication_view():
+    st.title("🌱 Welcome to AgriDirect")
+    st.write("Sign in to shop from local farms, manage listings, or review marketplace operations.")
+    login_tab, register_tab = st.tabs(["Sign in", "Create account"])
+    with login_tab:
+        with st.form("login-form"):
+            email = st.text_input("Email", placeholder="you@example.com")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+        if submitted:
+            user = st.session_state.users.get(email.strip().lower())
+            if user and password_matches(password, user["password"]):
+                st.session_state.authenticated_user = user["email"]
+                st.session_state.role = user["role"]
+                st.rerun()
+            else:
+                st.error("Invalid email or password.")
+        with st.expander("Demo accounts"):
+            st.code("customer@agridirect.local / customer123\nfarmer@agridirect.local / farmer123\nadmin@agridirect.local / admin123")
+    with register_tab:
+        with st.form("register-form"):
+            new_email = st.text_input("Email address", key="register-email")
+            new_password = st.text_input("Password", type="password", key="register-password")
+            confirm_password = st.text_input("Confirm password", type="password")
+            account_role = st.selectbox("Account type", ["Customer", "Farmer"])
+            registered = st.form_submit_button("Create account", use_container_width=True)
+        if registered:
+            normalized_email = new_email.strip().lower()
+            if "@" not in normalized_email or not new_password:
+                st.error("Enter a valid email and password.")
+            elif len(new_password) < 8:
+                st.error("Password must be at least 8 characters.")
+            elif new_password != confirm_password:
+                st.error("Passwords do not match.")
+            elif normalized_email in st.session_state.users:
+                st.error("An account with that email already exists.")
+            else:
+                st.session_state.users[normalized_email] = {
+                    "email": normalized_email, "role": account_role,
+                    "password": password_hash(new_password),
+                }
+                st.session_state.authenticated_user = normalized_email
+                st.session_state.role = account_role
+                st.success("Account created.")
+                st.rerun()
 
 
 def money(value):
@@ -43,7 +115,8 @@ def money(value):
 
 
 def current_role():
-    return st.session_state.get("role", "Customer")
+    email = st.session_state.get("authenticated_user")
+    return st.session_state.users.get(email, {}).get("role", "Customer")
 
 
 def add_to_cart(product_id, quantity=1):
@@ -248,14 +321,18 @@ def admin_view():
 
 def main():
     seed_state()
+    if not st.session_state.authenticated_user:
+        authentication_view()
+        return
     st.sidebar.title("AgriDirect")
     st.sidebar.caption("Farm fresh. Fairly traded. Directly delivered.")
-    role = st.sidebar.radio("Choose your workspace", ["Customer", "Farmer", "Admin"], index=["Customer", "Farmer", "Admin"].index(current_role()))
-    st.session_state.role = role
+    user = st.session_state.users[st.session_state.authenticated_user]
+    role = user["role"]
+    st.sidebar.success(f"Signed in as {user['email']}")
     if role == "Farmer":
-        st.session_state.user_email = st.sidebar.selectbox("Farmer account", ["farmer@agridirect.local", "orchard@agridirect.local", "collective@agridirect.local", "apiary@agridirect.local"])
+        st.session_state.user_email = user["email"]
     else:
-        st.session_state.user_email = "customer@agridirect.local"
+        st.session_state.user_email = user["email"]
     if role == "Customer":
         customer_view()
     elif role == "Farmer":
@@ -264,6 +341,9 @@ def main():
         admin_view()
     st.sidebar.divider()
     st.sidebar.caption("Demo data is stored in this browser session only.")
+    if st.sidebar.button("Sign out", use_container_width=True):
+        st.session_state.authenticated_user = None
+        st.rerun()
     if st.sidebar.button("Reset demo data"):
         for key in ["products", "cart", "orders", "next_product_id", "next_order_id"]:
             st.session_state.pop(key, None)
