@@ -29,7 +29,7 @@ Open the URL printed by Streamlit (normally `http://localhost:8501`). The app se
 
 - Customer, farmer, and admin workspace selection
 - Farmer Registration System (FRS) with username login, farmer registration, hashed passwords, and sign-out
-- Optional consent-based Face ID verification using camera capture; enrolled users must pass face verification at sign-in
+- Optional consent-based Face ID verification using camera capture when the compatible `face-recognition` package is installed; enrolled users must pass face verification at sign-in
 - Product browsing, search, category and organic filters
 - Cart quantity management and Cash on Delivery checkout
 - Customer order history and fulfillment status
@@ -55,6 +55,8 @@ New customer and farmer accounts can be registered from the sign-in screen. Sign
 For one-bucket online persistence, add an `AGRI_S3_BUCKET` Streamlit secret or environment variable plus normal AWS credentials. The app writes `agridirect/state.json` to that S3-compatible bucket after registrations, orders, product publishing, and Face ID enrollment. Without cloud credentials it safely uses browser session state.
 
 Face ID is opt-in and requires explicit camera consent. Face encodings are stored for the account and never displayed as photos. For production, use a managed identity/biometric provider, encrypted storage, retention limits, and required legal consent notices.
+
+The base Streamlit Cloud deployment intentionally does not install `face-recognition`/`dlib`, because that native dependency can fail on Cloud Python images. The app remains fully usable with password and username authentication and displays a clear Face ID availability message. Enable Face ID on a custom environment only after installing a compatible native build.
 
 ## Repository notes
 
