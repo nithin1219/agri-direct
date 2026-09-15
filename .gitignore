@@ -7,6 +7,8 @@ frontend/.vite/
 backend/.venv/
 backend/__pycache__/
 backend/*.pyc
+backend/**/__pycache__/
+backend/database/*.db
 backend/.env
 
 # OS

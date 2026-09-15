@@ -9,9 +9,9 @@ AgriDirect is an agricultural marketplace that connects farmers directly with cu
 - `database/` - MySQL schema and setup scripts
 - `uploads/` - local image uploads
 
-## Phase 1 status
+## Current status
 
-This phase sets up the project structure, frontend app shell, backend API skeleton, database schema, and environment configuration. The frontend and backend are both runnable and verified.
+The project includes a React/Vite frontend, Flask REST API, JWT authentication, seeded marketplace data, customer cart and checkout, and role-based customer, farmer, and admin dashboards.
 
 ## Quick start
 
@@ -44,15 +44,16 @@ SOURCE database/schema.sql;
 
 Copy `backend/.env.example` to `backend/.env` and update values for your local MySQL configuration.
 
-## Features in this phase
+## Included features
 
-- React + Vite frontend shell
-- Flask backend health endpoint
-- Bootstrap folder structure
-- MySQL schema template for the marketplace
-- Local uploads directory
+- React + Vite responsive frontend
+- Flask REST API with JWT authentication
+- SQLite development database with MySQL schema template
+- Product catalog, cart, COD checkout, and order creation
+- Customer, farmer, and admin dashboard statistics
+- Local uploads directory and environment configuration
 - Developer documentation
 
 ## Notes
 
-This is Phase 1 only. The full marketplace features are planned for later phases.
+SQLite is used for the zero-setup local development run. The relational MySQL schema is provided in `database/schema.sql` for a production database migration.
