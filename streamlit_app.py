@@ -16,6 +16,13 @@ import streamlit as st
 import numpy as np
 
 try:
+    import boto3
+    from botocore.exceptions import BotoCoreError, ClientError
+except ImportError:
+    boto3 = None
+    BotoCoreError = ClientError = None
+
+try:
     import face_recognition
 except ImportError:
     face_recognition = None
@@ -55,7 +62,7 @@ def cloud_bucket_config():
     """Return optional S3-compatible bucket settings from Streamlit secrets/env."""
     try:
         configured = dict(st.secrets.get("storage", {}))
-    except (FileNotFoundError, KeyError, TypeError):
+    except (FileNotFoundError, KeyError, TypeError, AttributeError):
         configured = {}
     return {
         "bucket": configured.get("bucket") or os.getenv("AGRI_S3_BUCKET"),
@@ -66,11 +73,9 @@ def cloud_bucket_config():
 def save_data_snapshot():
     """Persist a JSON snapshot when an S3-compatible bucket is configured."""
     config = cloud_bucket_config()
-    if not config["bucket"]:
+    if not config["bucket"] or boto3 is None:
         return False
     try:
-        import boto3
-        from botocore.exceptions import BotoCoreError, ClientError
         payload = json.dumps({
             "products": st.session_state.products,
             "users": st.session_state.users,
@@ -81,7 +86,7 @@ def save_data_snapshot():
             ContentType="application/json",
         )
         return True
-    except (ImportError, BotoCoreError, ClientError, OSError, ValueError):
+    except (BotoCoreError, ClientError, OSError, ValueError):
         return False
 
 
@@ -129,10 +134,10 @@ def authentication_view():
     st.write("Sign in to shop from local farms, manage listings, or review marketplace operations.")
     login_tab, register_tab = st.tabs(["Sign in", "Create account"])
     with login_tab:
+        face_photo = st.camera_input("Face verification (required for enrolled accounts)")
         with st.form("login-form"):
             email = st.text_input("Email or username", placeholder="you@example.com or greenvalley")
             password = st.text_input("Password", type="password")
-            face_photo = st.camera_input("Face verification (required for enrolled accounts)")
             submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         if submitted:
             login_value = email.strip().lower()
