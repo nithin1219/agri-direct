@@ -28,7 +28,7 @@ Open the URL printed by Streamlit (normally `http://localhost:8501`). The app se
 ## Included marketplace flows
 
 - Customer, farmer, and admin workspace selection
-- Session authentication with hashed passwords, registration, sign-in, and sign-out
+- Farmer Registration System (FRS) with username login, farmer registration, hashed passwords, and sign-out
 - Product browsing, search, category and organic filters
 - Cart quantity management and Cash on Delivery checkout
 - Customer order history and fulfillment status
@@ -42,11 +42,12 @@ The zero-database demo seeds these accounts for local testing:
 
 | Role | Email | Password |
 | --- | --- | --- |
-| Customer | `customer@agridirect.local` | `customer123` |
-| Farmer | `farmer@agridirect.local` | `farmer123` |
-| Admin | `admin@agridirect.local` | `admin123` |
+| Customer | `customer` or `customer@agridirect.local` | `customer123` |
+| Farmer | `greenvalley` or `farmer@agridirect.local` | `farmer123` |
+| Farmer | `sunrise` or `orchard@agridirect.local` | `orchard123` |
+| Admin | `admin` or `admin@agridirect.local` | `admin123` |
 
-New customer and farmer accounts can be registered from the sign-in screen. Authentication is intentionally session-local for this self-contained demo; use an external identity provider and persistent database before production use.
+New customer and farmer accounts can be registered from the sign-in screen. Signed-in farmers can publish listings with price, stock, description, and image URL; those images appear in the customer product cards. Authentication is intentionally session-local for this self-contained demo; use an external identity provider and persistent database before production use.
 
 ## Repository notes
 

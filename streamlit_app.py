@@ -22,9 +22,10 @@ st.set_page_config(
 DELIVERY_FEE = 40
 ORDER_STATUSES = ["Placed", "Confirmed", "Preparing", "Out for delivery", "Delivered"]
 DEMO_ACCOUNTS = {
-    "customer@agridirect.local": ("Customer", "customer123"),
-    "farmer@agridirect.local": ("Farmer", "farmer123"),
-    "admin@agridirect.local": ("Admin", "admin123"),
+    "customer@agridirect.local": ("Customer", "customer123", "customer"),
+    "farmer@agridirect.local": ("Farmer", "farmer123", "greenvalley"),
+    "orchard@agridirect.local": ("Farmer", "orchard123", "sunrise"),
+    "admin@agridirect.local": ("Admin", "admin123", "admin"),
 }
 
 
@@ -44,12 +45,12 @@ def seed_state():
     """Create a fresh in-memory marketplace for the current browser session."""
     if "products" not in st.session_state:
         st.session_state.products = [
-            {"id": 1, "name": "Farm Fresh Tomatoes", "category": "Vegetables", "price": 48.0, "unit": "kg", "stock": 32, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Juicy, vine-ripened tomatoes harvested this morning.", "emoji": "🍅"},
-            {"id": 2, "name": "Alphonso Mangoes", "category": "Fruits", "price": 180.0, "unit": "kg", "stock": 18, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "organic": True, "description": "Naturally sweet seasonal mangoes from our orchard.", "emoji": "🥭"},
-            {"id": 3, "name": "Organic Basmati Rice", "category": "Grains", "price": 125.0, "unit": "kg", "stock": 50, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Aromatic long-grain rice, grown without synthetic pesticides.", "emoji": "🌾"},
-            {"id": 4, "name": "Cold-Pressed Groundnut Oil", "category": "Pantry", "price": 220.0, "unit": "litre", "stock": 12, "farmer": "Harvest Collective", "farmer_id": "collective@agridirect.local", "organic": False, "description": "Small-batch wood-pressed oil with a rich, nutty flavour.", "emoji": "🫙"},
-            {"id": 5, "name": "Fresh Spinach", "category": "Vegetables", "price": 35.0, "unit": "bunch", "stock": 40, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Tender leafy greens picked at sunrise.", "emoji": "🥬"},
-            {"id": 6, "name": "Raw Forest Honey", "category": "Pantry", "price": 310.0, "unit": "500 g", "stock": 15, "farmer": "Hilltop Apiary", "farmer_id": "apiary@agridirect.local", "organic": True, "description": "Unfiltered wildflower honey collected from local hives.", "emoji": "🍯"},
+            {"id": 1, "name": "Farm Fresh Tomatoes", "category": "Vegetables", "price": 48.0, "unit": "kg", "stock": 32, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Juicy, vine-ripened tomatoes harvested this morning.", "emoji": "🍅", "image_url": "https://images.unsplash.com/photo-1546094096-0df4bcaaa337?w=900"},
+            {"id": 2, "name": "Alphonso Mangoes", "category": "Fruits", "price": 180.0, "unit": "kg", "stock": 18, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "organic": True, "description": "Naturally sweet seasonal mangoes from our orchard.", "emoji": "🥭", "image_url": "https://images.unsplash.com/photo-1553279768-865429fa0078?w=900"},
+            {"id": 3, "name": "Organic Basmati Rice", "category": "Grains", "price": 125.0, "unit": "kg", "stock": 50, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Aromatic long-grain rice, grown without synthetic pesticides.", "emoji": "🌾", "image_url": "https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?w=900"},
+            {"id": 4, "name": "Cold-Pressed Groundnut Oil", "category": "Pantry", "price": 220.0, "unit": "litre", "stock": 12, "farmer": "Harvest Collective", "farmer_id": "farmer@agridirect.local", "organic": False, "description": "Small-batch wood-pressed oil with a rich, nutty flavour.", "emoji": "🫙", "image_url": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=900"},
+            {"id": 5, "name": "Fresh Spinach", "category": "Vegetables", "price": 35.0, "unit": "bunch", "stock": 40, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Tender leafy greens picked at sunrise.", "emoji": "🥬", "image_url": "https://images.unsplash.com/photo-1576045057995-568f588f82fb?w=900"},
+            {"id": 6, "name": "Raw Forest Honey", "category": "Pantry", "price": 310.0, "unit": "500 g", "stock": 15, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "organic": True, "description": "Unfiltered wildflower honey collected from local hives.", "emoji": "🍯", "image_url": "https://images.unsplash.com/photo-1587049352846-4a222e784d38?w=900"},
         ]
     st.session_state.setdefault("cart", {})
     st.session_state.setdefault("orders", [])
@@ -57,8 +58,8 @@ def seed_state():
     st.session_state.setdefault("next_order_id", 1001)
     if "users" not in st.session_state:
         st.session_state.users = {
-            email: {"email": email, "role": role, "password": password_hash(password)}
-            for email, (role, password) in DEMO_ACCOUNTS.items()
+            email: {"email": email, "role": role, "username": username, "password": password_hash(password)}
+            for email, (role, password, username) in DEMO_ACCOUNTS.items()
         }
     st.session_state.setdefault("authenticated_user", None)
 
@@ -69,11 +70,14 @@ def authentication_view():
     login_tab, register_tab = st.tabs(["Sign in", "Create account"])
     with login_tab:
         with st.form("login-form"):
-            email = st.text_input("Email", placeholder="you@example.com")
+            email = st.text_input("Email or username", placeholder="you@example.com or greenvalley")
             password = st.text_input("Password", type="password")
             submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         if submitted:
-            user = st.session_state.users.get(email.strip().lower())
+            login_value = email.strip().lower()
+            user = st.session_state.users.get(login_value)
+            if not user:
+                user = next((candidate for candidate in st.session_state.users.values() if candidate["username"] == login_value), None)
             if user and password_matches(password, user["password"]):
                 st.session_state.authenticated_user = user["email"]
                 st.session_state.role = user["role"]
@@ -81,17 +85,19 @@ def authentication_view():
             else:
                 st.error("Invalid email or password.")
         with st.expander("Demo accounts"):
-            st.code("customer@agridirect.local / customer123\nfarmer@agridirect.local / farmer123\nadmin@agridirect.local / admin123")
+            st.code("customer / customer123\n" "greenvalley / farmer123\n" "sunrise / orchard123\n" "admin / admin123")
     with register_tab:
         with st.form("register-form"):
             new_email = st.text_input("Email address", key="register-email")
+            new_username = st.text_input("Username", key="register-username", help="Farmers use this username to sign in to the FRS portal.")
             new_password = st.text_input("Password", type="password", key="register-password")
             confirm_password = st.text_input("Confirm password", type="password")
             account_role = st.selectbox("Account type", ["Customer", "Farmer"])
             registered = st.form_submit_button("Create account", use_container_width=True)
         if registered:
             normalized_email = new_email.strip().lower()
-            if "@" not in normalized_email or not new_password:
+            username = new_username.strip().lower()
+            if "@" not in normalized_email or not new_password or not username:
                 st.error("Enter a valid email and password.")
             elif len(new_password) < 8:
                 st.error("Password must be at least 8 characters.")
@@ -99,9 +105,11 @@ def authentication_view():
                 st.error("Passwords do not match.")
             elif normalized_email in st.session_state.users:
                 st.error("An account with that email already exists.")
+            elif any(user["username"] == username for user in st.session_state.users.values()):
+                st.error("That username is already taken.")
             else:
                 st.session_state.users[normalized_email] = {
-                    "email": normalized_email, "role": account_role,
+                    "email": normalized_email, "role": account_role, "username": username,
                     "password": password_hash(new_password),
                 }
                 st.session_state.authenticated_user = normalized_email
@@ -138,6 +146,8 @@ def cart_rows():
 
 def show_product_card(product):
     with st.container(border=True):
+        if product.get("image_url"):
+            st.image(product["image_url"], use_container_width=True)
         st.markdown(f"### {product['emoji']} {product['name']}")
         st.caption(f"{product['farmer']} · {product['category']}")
         st.write(product["description"])
@@ -267,6 +277,7 @@ def farmer_view():
     with st.form("new-product"):
         name = st.text_input("Product name")
         description = st.text_area("Description")
+        image_url = st.text_input("Product image URL", placeholder="https://...")
         category = st.selectbox("Category", ["Vegetables", "Fruits", "Grains", "Pantry", "Dairy"])
         price, stock = st.columns(2)
         with price:
@@ -283,6 +294,7 @@ def farmer_view():
                     "price": product_price, "unit": unit.strip() or "kg", "stock": int(product_stock),
                     "farmer": "My farm", "farmer_id": farmer_id, "organic": True,
                     "description": description.strip() or "Freshly harvested from our farm.", "emoji": "🌿",
+                    "image_url": image_url.strip(),
                 })
                 st.session_state.next_product_id += 1
                 st.success("Your product is now live in the marketplace.")
@@ -328,7 +340,7 @@ def main():
     st.sidebar.caption("Farm fresh. Fairly traded. Directly delivered.")
     user = st.session_state.users[st.session_state.authenticated_user]
     role = user["role"]
-    st.sidebar.success(f"Signed in as {user['email']}")
+    st.sidebar.success(f"Signed in as @{user['username']}")
     if role == "Farmer":
         st.session_state.user_email = user["email"]
     else:
