@@ -1,59 +1,40 @@
 # AgriDirect
 
-AgriDirect is an agricultural marketplace that connects farmers directly with customers.
+AgriDirect is a self-contained Streamlit marketplace that connects farmers directly with customers. The Streamlit app is the supported runtime; it needs no Flask server, JavaScript build, database server, or environment variables.
 
-## Project structure
+## Run locally
 
-- `frontend/` - React + Vite single-page web app
-- `backend/` - Flask REST API server
-- `database/` - MySQL schema and setup scripts
-- `uploads/` - local image uploads
-
-## Current status
-
-The project includes a React/Vite frontend, Flask REST API, JWT authentication, seeded marketplace data, customer cart and checkout, and role-based customer, farmer, and admin dashboards.
-
-## Quick start
-
-### 1) Frontend
+From the repository root:
 
 ```bash
-cd frontend
-npm install
-npm run dev -- --host 0.0.0.0 --port 5173
-```
-
-### 2) Backend
-
-```bash
-cd backend
 python -m venv .venv
+# Windows
 .venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python app.py
+.venv\Scripts\python -m streamlit run streamlit_app.py
+# macOS/Linux
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m streamlit run streamlit_app.py
 ```
 
-### 3) Database
+Open the URL printed by Streamlit (normally `http://localhost:8501`). The app seeds sample products and stores cart, orders, listings, and status updates in the current browser session.
 
-Create a MySQL database and run:
+## Deploy on Streamlit Community Cloud
 
-```sql
-SOURCE database/schema.sql;
-```
+1. Push this repository to GitHub.
+2. In [Streamlit Community Cloud](https://share.streamlit.io/), select the repository and the `main` branch.
+3. Set **Main file path** to `streamlit_app.py`.
+4. Deploy. Community Cloud installs the root `requirements.txt` automatically.
 
-## Environment variables
+## Included marketplace flows
 
-Copy `backend/.env.example` to `backend/.env` and update values for your local MySQL configuration.
+- Customer, farmer, and admin workspace selection
+- Product browsing, search, category and organic filters
+- Cart quantity management and Cash on Delivery checkout
+- Customer order history and fulfillment status
+- Farmer product creation and inventory view
+- Admin inventory, order, and session-revenue dashboard
+- Seeded sample data with local `st.session_state` persistence
 
-## Included features
+## Repository notes
 
-- React + Vite responsive frontend
-- Flask REST API with JWT authentication
-- SQLite development database with MySQL schema template
-- Product catalog, cart, COD checkout, and order creation
-- Customer, farmer, and admin dashboard statistics
-- Local uploads directory and environment configuration
-- Developer documentation
-
-## Notes
-
-SQLite is used for the zero-setup local development run. The relational MySQL schema is provided in `database/schema.sql` for a production database migration.
+`frontend/` and `backend/` are retained as historical/reference implementations only. They are not required to install, run, or deploy AgriDirect. The supported entry point is the root `streamlit_app.py`; the legacy Flask and React dependency manifests are intentionally not part of the Streamlit setup.
