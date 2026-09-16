@@ -37,6 +37,7 @@ DEMO_ACCOUNTS = {
     "admin@agridirect.local": ("Admin", "admin123", "admin"),
 }
 FARM_BACKGROUND = "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=2200&q=85"
+IMAGE_TYPES = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff"]
 def password_hash(password, salt=None):
     salt = salt or secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
@@ -116,12 +117,19 @@ def authentication_view():
         with st.expander("Demo accounts"):
             st.code("customer / customer123\n" "greenvalley / farmer123\n" "sunrise / orchard123\n" "admin / admin123")
     with register_tab:
+        account_role = st.selectbox("Account type", ["Customer", "Farmer"], key="register-role")
+        farmer_photo = st.file_uploader(
+            "Farmer FRS profile photo (required for farmer accounts)",
+            type=IMAGE_TYPES,
+            help="Upload a clear face photo for the farmer registration profile.",
+            disabled=account_role != "Farmer",
+            key="frs-profile-photo",
+        )
         with st.form("register-form"):
             new_email = st.text_input("Email address", key="register-email")
             new_username = st.text_input("Username", key="register-username", help="Farmers use this username to sign in to the FRS portal.")
             new_password = st.text_input("Password", type="password", key="register-password")
             confirm_password = st.text_input("Confirm password", type="password")
-            account_role = st.selectbox("Account type", ["Customer", "Farmer"])
             registered = st.form_submit_button("Create account", use_container_width=True)
         if registered:
             normalized_email = new_email.strip().lower()
@@ -136,10 +144,14 @@ def authentication_view():
                 st.error("An account with that email already exists.")
             elif any(user["username"] == username for user in st.session_state.users.values()):
                 st.error("That username is already taken.")
+            elif account_role == "Farmer" and not farmer_photo:
+                st.error("Farmer registration requires an FRS profile photo.")
             else:
                 st.session_state.users[normalized_email] = {
                     "email": normalized_email, "role": account_role, "username": username,
                     "password": password_hash(new_password),
+                    "frs_photo": farmer_photo.getvalue() if farmer_photo else None,
+                    "frs_photo_name": farmer_photo.name if farmer_photo else None,
                 }
                 st.session_state.authenticated_user = normalized_email
                 st.session_state.role = account_role
@@ -179,7 +191,9 @@ def cart_rows():
 
 def show_product_card(product):
     with st.container(border=True):
-        if product.get("image_url"):
+        if product.get("image_bytes"):
+            st.image(product["image_bytes"], caption=product.get("image_name", "Uploaded product image"), use_container_width=True)
+        elif product.get("image_url"):
             st.image(product["image_url"], use_container_width=True)
         st.markdown(f"### {product['emoji']} {product['name']}")
         st.caption(f"{product['farmer']} · {product['category']}")
@@ -309,7 +323,21 @@ def farmer_view():
     columns[0].metric("Your listings", len(mine))
     columns[1].metric("Available stock", sum(p["stock"] for p in mine))
     columns[2].metric("Marketplace status", "Active")
+    with st.expander("My FRS profile", expanded=True):
+        st.write(f"**Username:** @{st.session_state.users[st.session_state.authenticated_user]['username']}")
+        st.write(f"**Email:** {st.session_state.authenticated_user}")
+        profile_photo = st.session_state.users[st.session_state.authenticated_user].get("frs_photo")
+        if profile_photo:
+            st.image(profile_photo, caption="FRS profile photo", width=180)
+        else:
+            st.info("No FRS profile photo has been saved for this session.")
     st.subheader("Add a product")
+    product_upload = st.file_uploader(
+        "Upload product image",
+        type=IMAGE_TYPES,
+        help="Supported: JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF.",
+        key="product-image-upload",
+    )
     with st.form("new-product"):
         name = st.text_input("Product name")
         description = st.text_area("Description")
@@ -331,6 +359,8 @@ def farmer_view():
                     "farmer": "My farm", "farmer_id": farmer_id, "organic": True,
                     "description": description.strip() or "Freshly harvested from our farm.", "emoji": "🌿",
                     "image_url": image_url.strip(),
+                    "image_bytes": product_upload.getvalue() if product_upload else None,
+                    "image_name": product_upload.name if product_upload else None,
                 })
                 st.session_state.next_product_id += 1
                 save_cloud_snapshot()
