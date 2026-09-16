@@ -36,6 +36,7 @@ Open the URL printed by Streamlit (normally `http://localhost:8501`). The app se
 - Newly published farmer listings become visible to customers after marketplace refresh when shared bucket storage is configured
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
 - Cart quantity management and Cash on Delivery checkout
+- Welcome message at sign-in and thank-you confirmation after completed purchases
 - Customer order history and fulfillment status
 - Farmer product creation and inventory view
 - Admin inventory, order, and session-revenue dashboard

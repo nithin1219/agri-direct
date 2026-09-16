@@ -291,7 +291,8 @@ def seed_state():
 
 def authentication_view():
     st.title("🌱 Welcome to AgriDirect")
-    st.write("Sign in to shop from local farms, manage listings, or review marketplace operations.")
+    st.success("Welcome! Sign in to continue to your AgriDirect marketplace.")
+    st.write("Use your registered email or username and password to shop, manage listings, or review marketplace operations.")
     login_tab, register_tab = st.tabs(["Sign in", "Create account"])
     with login_tab:
         with st.form("login-form"):
@@ -523,7 +524,8 @@ def place_order(address, city, pincode, total):
         product["stock"] -= quantity
     st.session_state.cart.clear()
     save_cloud_snapshot()
-    st.success(f"Order #{order['id']} placed successfully! Pay {money(total)} on delivery.")
+    st.success(f"Thank you for your purchase! Order #{order['id']} was placed successfully.")
+    st.info(f"Your total is {money(total)}. Payment method: Cash on Delivery.")
     st.balloons()
 
 
