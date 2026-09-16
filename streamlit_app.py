@@ -12,6 +12,9 @@ import io
 import json
 import os
 import secrets
+import smtplib
+from datetime import timedelta
+from email.message import EmailMessage
 import sqlite3
 
 import pandas as pd
@@ -146,6 +149,45 @@ def password_matches(password, stored_hash):
     salt, expected = stored_hash.split("$", 1)
     actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
     return secrets.compare_digest(actual, expected)
+
+
+def email_config():
+    try:
+        source = st.secrets
+        return {
+            "host": source.get("SMTP_HOST") or os.getenv("SMTP_HOST"),
+            "port": int(source.get("SMTP_PORT") or os.getenv("SMTP_PORT", "587")),
+            "username": source.get("SMTP_USERNAME") or os.getenv("SMTP_USERNAME"),
+            "password": source.get("SMTP_PASSWORD") or os.getenv("SMTP_PASSWORD"),
+            "sender": source.get("SMTP_SENDER") or os.getenv("SMTP_SENDER"),
+        }
+    except (FileNotFoundError, KeyError, TypeError, ValueError):
+        return {
+            "host": os.getenv("SMTP_HOST"),
+            "port": int(os.getenv("SMTP_PORT", "587")),
+            "username": os.getenv("SMTP_USERNAME"),
+            "password": os.getenv("SMTP_PASSWORD"),
+            "sender": os.getenv("SMTP_SENDER"),
+        }
+
+
+def send_email_otp(recipient, otp):
+    config = email_config()
+    if not all([config["host"], config["username"], config["password"], config["sender"]]):
+        return False, "Email delivery is not configured."
+    message = EmailMessage()
+    message["Subject"] = "AgriDirect email verification code"
+    message["From"] = config["sender"]
+    message["To"] = recipient
+    message.set_content(f"Your AgriDirect verification code is {otp}. It expires in 10 minutes.")
+    try:
+        with smtplib.SMTP(config["host"], config["port"], timeout=15) as server:
+            server.starttls()
+            server.login(config["username"], config["password"])
+            server.send_message(message)
+        return True, "Verification code sent to your email."
+    except (OSError, smtplib.SMTPException):
+        return False, "Unable to send email right now. Check SMTP settings and try again."
 
 
 def _encode_bytes(value):
@@ -326,8 +368,8 @@ def authentication_view():
             new_username = st.text_input("Username", key="register-username", help="Farmers use this username to sign in to the FRS portal.")
             new_password = st.text_input("Password", type="password", key="register-password")
             confirm_password = st.text_input("Confirm password", type="password")
-            registered = st.form_submit_button("Create account", use_container_width=True)
-        if registered:
+            request_otp = st.form_submit_button("Send email verification code", use_container_width=True)
+        if request_otp:
             normalized_email = new_email.strip().lower()
             username = new_username.strip().lower()
             if "@" not in normalized_email or not new_password or not username:
@@ -343,19 +385,42 @@ def authentication_view():
             elif account_role == "Farmer" and not farmer_photo:
                 st.error("Farmer registration requires an FRS profile photo.")
             else:
-                st.session_state.users[normalized_email] = {
+                otp = f"{secrets.randbelow(1_000_000):06d}"
+                delivered, message = send_email_otp(normalized_email, otp)
+                st.session_state.pending_registration = {
                     "email": normalized_email, "role": account_role, "username": username,
                     "password": password_hash(new_password),
                     "frs_photo": farmer_photo.getvalue() if farmer_photo else None,
                     "frs_photo_name": farmer_photo.name if farmer_photo else None,
                     "face_encoding": face_encoding(farmer_photo.getvalue()) if farmer_photo and account_role == "Farmer" else None,
+                    "otp_hash": password_hash(otp),
+                    "otp_expires": datetime.now() + timedelta(minutes=10),
                 }
-                save_database_user(st.session_state.users[normalized_email])
-                save_cloud_snapshot()
-                st.session_state.authenticated_user = normalized_email
-                st.session_state.role = account_role
-                st.success("Account created.")
-                st.rerun()
+                if delivered:
+                    st.success(message)
+                else:
+                    st.warning(message)
+                    st.info("Demo mode: SMTP is not configured. Use this one-time code: " + otp)
+        pending = st.session_state.get("pending_registration")
+        if pending:
+            with st.form("verify-email-form"):
+                verification_code = st.text_input("Enter the 6-digit email verification code", max_chars=6)
+                verify = st.form_submit_button("Verify email and create account", type="primary")
+            if verify:
+                if datetime.now() > pending["otp_expires"]:
+                    st.error("This code expired. Request a new verification code.")
+                elif not password_matches(verification_code.strip(), pending["otp_hash"]):
+                    st.error("Invalid verification code.")
+                else:
+                    account = {key: pending[key] for key in ["email", "role", "username", "password", "frs_photo", "frs_photo_name", "face_encoding"]}
+                    st.session_state.users[account["email"]] = account
+                    save_database_user(account)
+                    save_cloud_snapshot()
+                    st.session_state.pop("pending_registration", None)
+                    st.session_state.authenticated_user = account["email"]
+                    st.session_state.role = account["role"]
+                    st.success("Email verified. Your account is ready.")
+                    st.rerun()
 
 
 def money(value):
