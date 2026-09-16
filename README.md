@@ -30,6 +30,7 @@ Open the URL printed by Streamlit (normally `http://localhost:8501`). The app se
 - Customer, farmer, and admin workspace selection
 - Farmer Registration System (FRS) with username login, farmer registration, hashed passwords, and sign-out
 - Farmer FRS profile photo enrollment and farmer-only profile details
+- Daily farmer verification with camera access when optional face matching is available
 - Product browsing, search, category and organic filters
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
 - Cart quantity management and Cash on Delivery checkout
@@ -54,7 +55,9 @@ New customer and farmer accounts can be registered from the sign-in screen. Sign
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. The base app is session-local and deploys without cloud credentials. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
 
-Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. The photo is an enrollment/profile artifact, not biometric face matching; true face recognition requires a managed identity provider with explicit consent and retention controls.
+Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. If a deployment provides the optional `face-recognition` package, the enrolled farmer receives a daily camera verification gate; otherwise the app safely falls back to username/password login without failing.
+
+When `AGRI_S3_BUCKET` and AWS credentials are configured, the app restores users, hashed passwords, product listings, uploaded image bytes, orders, and verification dates from `agridirect/state.json`, then snapshots changes back to the same bucket. Do not store production credentials in source control; configure them as Streamlit secrets or deployment environment variables.
 
 ## Repository notes
 

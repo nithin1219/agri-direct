@@ -5,7 +5,10 @@ local demos, classroom use, and quick deployment on Streamlit Community Cloud.
 """
 
 from datetime import datetime
+from datetime import date
+import base64
 import hashlib
+import io
 import json
 import os
 import secrets
@@ -19,6 +22,11 @@ try:
 except ImportError:
     boto3 = None
     BotoCoreError = ClientError = OSError
+
+try:
+    import face_recognition
+except ImportError:
+    face_recognition = None
 
 
 st.set_page_config(
@@ -50,20 +58,75 @@ def password_matches(password, stored_hash):
     return secrets.compare_digest(actual, expected)
 
 
+def _encode_bytes(value):
+    return base64.b64encode(value).decode("ascii") if isinstance(value, bytes) else value
+
+
+def _decode_bytes(value):
+    try:
+        return base64.b64decode(value) if isinstance(value, str) else value
+    except (ValueError, TypeError):
+        return None
+
+
+def load_cloud_snapshot():
+    """Restore persisted app state when an optional S3 bucket is configured."""
+    bucket, region = storage_config()
+    if not bucket or boto3 is None:
+        return None
+    try:
+        response = boto3.client("s3", region_name=region).get_object(
+            Bucket=bucket, Key="agridirect/state.json"
+        )
+        return json.loads(response["Body"].read().decode("utf-8"))
+    except (BotoCoreError, ClientError, OSError, ValueError, KeyError, json.JSONDecodeError):
+        return None
+
+
+def face_encoding(image_bytes):
+    if face_recognition is None:
+        return None
+    image = face_recognition.load_image_file(io.BytesIO(image_bytes))
+    encodings = face_recognition.face_encodings(image)
+    return encodings[0].tolist() if encodings else None
+
+
+def verify_face(image_bytes, reference):
+    if face_recognition is None or not reference:
+        return False
+    try:
+        candidate = face_encoding(image_bytes)
+        return bool(candidate and face_recognition.compare_faces([reference], candidate, tolerance=0.48)[0])
+    except (OSError, ValueError):
+        return False
+
+
+def storage_config():
+    bucket = os.getenv("AGRI_S3_BUCKET")
+    region = os.getenv("AWS_REGION")
+    try:
+        bucket = bucket or st.secrets.get("AGRI_S3_BUCKET")
+        region = region or st.secrets.get("AWS_REGION")
+    except (FileNotFoundError, KeyError, AttributeError, TypeError):
+        pass
+    return bucket, region
+
+
 def save_cloud_snapshot():
     """Best-effort optional S3 snapshot; local session remains the source of truth."""
-    bucket = os.getenv("AGRI_S3_BUCKET")
+    bucket, region = storage_config()
     if not bucket or boto3 is None:
         return
     try:
-        boto3.client("s3", region_name=os.getenv("AWS_REGION")).put_object(
+        payload = {
+            "products": [{**product, "image_bytes": _encode_bytes(product.get("image_bytes"))} for product in st.session_state.products],
+            "users": {email: {**user, "frs_photo": _encode_bytes(user.get("frs_photo"))} for email, user in st.session_state.users.items()},
+            "orders": st.session_state.orders,
+        }
+        boto3.client("s3", region_name=region).put_object(
             Bucket=bucket,
             Key="agridirect/state.json",
-            Body=json.dumps({
-                "products": st.session_state.products,
-                "users": st.session_state.users,
-                "orders": st.session_state.orders,
-            }, default=str).encode(),
+            Body=json.dumps(payload, default=str).encode(),
             ContentType="application/json",
         )
     except (BotoCoreError, ClientError, OSError, ValueError):
@@ -73,8 +136,9 @@ def save_cloud_snapshot():
 
 def seed_state():
     """Create a fresh in-memory marketplace for the current browser session."""
+    snapshot = load_cloud_snapshot()
     if "products" not in st.session_state:
-        st.session_state.products = [
+        st.session_state.products = (snapshot or {}).get("products") or [
             {"id": 1, "name": "Farm Fresh Tomatoes", "category": "Vegetables", "price": 48.0, "unit": "kg", "stock": 32, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Juicy, vine-ripened tomatoes harvested this morning.", "emoji": "🍅", "image_url": "https://images.unsplash.com/photo-1546094096-0df4bcaaa337?w=900"},
             {"id": 2, "name": "Alphonso Mangoes", "category": "Fruits", "price": 180.0, "unit": "kg", "stock": 18, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "organic": True, "description": "Naturally sweet seasonal mangoes from our orchard.", "emoji": "🥭", "image_url": "https://images.unsplash.com/photo-1553279768-865429fa0078?w=900"},
             {"id": 3, "name": "Organic Basmati Rice", "category": "Grains", "price": 125.0, "unit": "kg", "stock": 50, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Aromatic long-grain rice, grown without synthetic pesticides.", "emoji": "🌾", "image_url": "https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?w=900"},
@@ -82,8 +146,10 @@ def seed_state():
             {"id": 5, "name": "Fresh Spinach", "category": "Vegetables", "price": 35.0, "unit": "bunch", "stock": 40, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Tender leafy greens picked at sunrise.", "emoji": "🥬", "image_url": "https://images.unsplash.com/photo-1576045057995-568f588f82fb?w=900"},
             {"id": 6, "name": "Raw Forest Honey", "category": "Pantry", "price": 310.0, "unit": "500 g", "stock": 15, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "organic": True, "description": "Unfiltered wildflower honey collected from local hives.", "emoji": "🍯", "image_url": "https://images.unsplash.com/photo-1587049352846-4a222e784d38?w=900"},
         ]
+        for product in st.session_state.products:
+            product["image_bytes"] = _decode_bytes(product.get("image_bytes"))
     st.session_state.setdefault("cart", {})
-    st.session_state.setdefault("orders", [])
+    st.session_state.setdefault("orders", (snapshot or {}).get("orders", []))
     st.session_state.setdefault("next_product_id", 7)
     st.session_state.setdefault("next_order_id", 1001)
     if "users" not in st.session_state:
@@ -91,6 +157,10 @@ def seed_state():
             email: {"email": email, "role": role, "username": username, "password": password_hash(password)}
             for email, (role, password, username) in DEMO_ACCOUNTS.items()
         }
+        if snapshot and snapshot.get("users"):
+            st.session_state.users = snapshot["users"]
+            for user in st.session_state.users.values():
+                user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
     st.session_state.setdefault("authenticated_user", None)
 
 
@@ -152,7 +222,9 @@ def authentication_view():
                     "password": password_hash(new_password),
                     "frs_photo": farmer_photo.getvalue() if farmer_photo else None,
                     "frs_photo_name": farmer_photo.name if farmer_photo else None,
+                    "face_encoding": face_encoding(farmer_photo.getvalue()) if farmer_photo and account_role == "Farmer" else None,
                 }
+                save_cloud_snapshot()
                 st.session_state.authenticated_user = normalized_email
                 st.session_state.role = account_role
                 st.success("Account created.")
@@ -170,6 +242,28 @@ def current_role():
 
 def current_user():
     return st.session_state.users[st.session_state.authenticated_user]
+
+
+def daily_farmer_verification():
+    user = current_user()
+    if user["role"] != "Farmer" or user.get("last_face_verification") == date.today().isoformat():
+        return True
+    st.subheader("Daily farmer verification")
+    if face_recognition is None or not user.get("face_encoding"):
+        st.info("Face matching is not enabled in this deployment. Continue with your secure farmer login.")
+        user["last_face_verification"] = date.today().isoformat()
+        return True
+    photo = st.camera_input("Allow camera access and capture your face to continue")
+    if not photo:
+        st.warning("Camera access is required for today's farmer dashboard verification.")
+        return False
+    if verify_face(photo.getvalue(), user["face_encoding"]):
+        user["last_face_verification"] = date.today().isoformat()
+        save_cloud_snapshot()
+        st.success("Daily verification complete.")
+        return True
+    st.error("Face verification failed. Try again with good lighting and one face in the frame.")
+    return False
 
 
 def add_to_cart(product_id, quantity=1):
@@ -419,6 +513,8 @@ def main():
     user = st.session_state.users[st.session_state.authenticated_user]
     role = user["role"]
     st.sidebar.success(f"Signed in as @{user['username']}")
+    if not daily_farmer_verification():
+        return
     if role == "Farmer":
         st.session_state.user_email = user["email"]
     else:
