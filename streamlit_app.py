@@ -150,8 +150,14 @@ def seed_state():
             product["image_bytes"] = _decode_bytes(product.get("image_bytes"))
     st.session_state.setdefault("cart", {})
     st.session_state.setdefault("orders", (snapshot or {}).get("orders", []))
-    st.session_state.setdefault("next_product_id", 7)
-    st.session_state.setdefault("next_order_id", 1001)
+    st.session_state.setdefault(
+        "next_product_id",
+        max((product.get("id", 0) for product in st.session_state.products), default=6) + 1,
+    )
+    st.session_state.setdefault(
+        "next_order_id",
+        max((order.get("id", 1000) for order in st.session_state.orders), default=1000) + 1,
+    )
     if "users" not in st.session_state:
         st.session_state.users = {
             email: {"email": email, "role": role, "username": username, "password": password_hash(password)}
@@ -489,6 +495,7 @@ def admin_view():
         new_status = st.selectbox("Set status", ORDER_STATUSES)
         if st.button("Update order status"):
             next(order for order in st.session_state.orders if order["id"] == selected)["status"] = new_status
+            save_cloud_snapshot()
             st.success(f"Order #{selected} updated to {new_status}.")
 
 
