@@ -669,6 +669,8 @@ def farmer_view():
 
 def admin_view():
     st.title("🛡️ Admin dashboard")
+    st.caption("Admin-only controls for farmer FRS verification and marketplace operations.")
+    st.info("Admin login: admin@agridirect.local (or username `admin`) · password: `admin123`")
     customers = 1
     farmers = len({p["farmer_id"] for p in st.session_state.products})
     revenue = sum(order["total"] for order in st.session_state.orders)
@@ -677,6 +679,36 @@ def admin_view():
     columns[1].metric("Farmers", farmers)
     columns[2].metric("Orders", len(st.session_state.orders))
     columns[3].metric("Session revenue", money(revenue))
+    st.subheader("Farmer FRS verification")
+    farmer_users = [
+        user for user in st.session_state.users.values() if user["role"] == "Farmer"
+    ]
+    if farmer_users:
+        verification_rows = [
+            {
+                "Username": f"@{user['username']}",
+                "Email": user["email"],
+                "Profile photo": "Saved" if user.get("frs_photo") else "Missing",
+                "Face matching": "Enabled" if user.get("face_encoding") else "Optional/unavailable",
+                "Last daily verification": user.get("last_face_verification") or "Not verified today",
+            }
+            for user in farmer_users
+        ]
+        st.dataframe(pd.DataFrame(verification_rows), use_container_width=True, hide_index=True)
+        selected_farmer = st.selectbox(
+            "Farmer account to manage",
+            [user["email"] for user in farmer_users],
+            key="admin-farmer-account",
+        )
+        if st.button("Require verification again today", key="admin-reset-farmer-verification"):
+            farmer = st.session_state.users[selected_farmer]
+            farmer["last_face_verification"] = None
+            save_database_user(farmer)
+            save_cloud_snapshot()
+            st.success(f"Daily verification reset for @{farmer['username']}.")
+            st.rerun()
+    else:
+        st.info("No farmer accounts have been registered yet.")
     st.subheader("Marketplace inventory")
     inventory = pd.DataFrame(st.session_state.products)
     st.dataframe(inventory[["name", "category", "farmer", "price", "stock", "organic"]], use_container_width=True, hide_index=True)

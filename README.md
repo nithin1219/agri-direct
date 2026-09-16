@@ -33,6 +33,7 @@ Open the URL printed by Streamlit (normally `http://localhost:8501`). The app se
 - Email OTP verification before a new account is created
 - Farmer FRS profile photo enrollment and farmer-only profile details
 - Daily farmer verification with camera access when optional face matching is available
+- Admin-only farmer FRS verification status and reset controls
 - Product browsing, search, category and organic filters
 - Newly published farmer listings become visible to customers after marketplace refresh when shared bucket storage is configured
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
@@ -54,6 +55,8 @@ The app seeds these accounts for local testing:
 | Farmer | `greenvalley` or `farmer@agridirect.local` | `farmer123` |
 | Farmer | `sunrise` or `orchard@agridirect.local` | `orchard123` |
 | Admin | `admin` or `admin@agridirect.local` | `admin123` |
+
+The seeded administrator can review farmer FRS profile-photo status, face-matching availability, and the last daily verification date, then require a farmer to verify again.
 
 New customer and farmer accounts can be registered from the sign-in screen. Signed-in farmers can publish listings with price, stock, description, and image URL; those images appear in the customer product cards. Customer orders are scoped to the signed-in account, while farmer listings are scoped to the signed-in farmer.
 
