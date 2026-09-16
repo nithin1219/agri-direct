@@ -12,6 +12,7 @@ import io
 import json
 import os
 import secrets
+import sqlite3
 
 import pandas as pd
 import streamlit as st
@@ -46,6 +47,95 @@ DEMO_ACCOUNTS = {
 }
 FARM_BACKGROUND = "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=2200&q=85"
 IMAGE_TYPES = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff"]
+DATABASE_PATH = os.getenv("AGRIDIRECT_DATABASE", "agridirect_users.db")
+
+
+def database_connection():
+    connection = sqlite3.connect(DATABASE_PATH)
+    connection.row_factory = sqlite3.Row
+    return connection
+
+
+def initialize_database():
+    with database_connection() as connection:
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                email TEXT PRIMARY KEY,
+                username TEXT NOT NULL UNIQUE,
+                role TEXT NOT NULL CHECK(role IN ('Customer', 'Farmer', 'Admin')),
+                password_hash TEXT NOT NULL,
+                frs_photo BLOB,
+                frs_photo_name TEXT,
+                face_encoding TEXT,
+                last_face_verification TEXT
+            )
+            """
+        )
+        connection.commit()
+
+
+def load_database_users():
+    try:
+        initialize_database()
+        with database_connection() as connection:
+            rows = connection.execute("SELECT * FROM users").fetchall()
+    except sqlite3.Error:
+        return {}
+    users = {}
+    for row in rows:
+        try:
+            encoding = json.loads(row["face_encoding"]) if row["face_encoding"] else None
+        except json.JSONDecodeError:
+            encoding = None
+        users[row["email"]] = {
+            "email": row["email"],
+            "username": row["username"],
+            "role": row["role"],
+            "password": row["password_hash"],
+            "frs_photo": row["frs_photo"],
+            "frs_photo_name": row["frs_photo_name"],
+            "face_encoding": encoding,
+            "last_face_verification": row["last_face_verification"],
+        }
+    return users
+
+
+def save_database_user(user):
+    try:
+        initialize_database()
+        with database_connection() as connection:
+            connection.execute(
+            """
+            INSERT INTO users
+                (email, username, role, password_hash, frs_photo, frs_photo_name, face_encoding, last_face_verification)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(email) DO UPDATE SET
+                username=excluded.username,
+                role=excluded.role,
+                password_hash=excluded.password_hash,
+                frs_photo=excluded.frs_photo,
+                frs_photo_name=excluded.frs_photo_name,
+                face_encoding=excluded.face_encoding,
+                last_face_verification=excluded.last_face_verification
+            """,
+                (
+                    user["email"],
+                    user["username"],
+                    user["role"],
+                    user["password"],
+                    user.get("frs_photo"),
+                    user.get("frs_photo_name"),
+                    json.dumps(user.get("face_encoding")) if user.get("face_encoding") else None,
+                    user.get("last_face_verification"),
+                ),
+            )
+            connection.commit()
+    except sqlite3.Error:
+        return False
+    return True
+
+
 def password_hash(password, salt=None):
     salt = salt or secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
@@ -186,7 +276,7 @@ def seed_state():
         max((order.get("id", 1000) for order in st.session_state.orders), default=1000) + 1,
     )
     if "users" not in st.session_state:
-        st.session_state.users = {
+        st.session_state.users = load_database_users() or {
             email: {"email": email, "role": role, "username": username, "password": password_hash(password)}
             for email, (role, password, username) in DEMO_ACCOUNTS.items()
         }
@@ -194,6 +284,8 @@ def seed_state():
             st.session_state.users = snapshot["users"]
             for user in st.session_state.users.values():
                 user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
+        for user in st.session_state.users.values():
+            save_database_user(user)
     st.session_state.setdefault("authenticated_user", None)
 
 
@@ -257,6 +349,7 @@ def authentication_view():
                     "frs_photo_name": farmer_photo.name if farmer_photo else None,
                     "face_encoding": face_encoding(farmer_photo.getvalue()) if farmer_photo and account_role == "Farmer" else None,
                 }
+                save_database_user(st.session_state.users[normalized_email])
                 save_cloud_snapshot()
                 st.session_state.authenticated_user = normalized_email
                 st.session_state.role = account_role
@@ -292,6 +385,7 @@ def daily_farmer_verification():
         return False
     if verify_face(photo.getvalue(), user["face_encoding"]):
         user["last_face_verification"] = date.today().isoformat()
+        save_database_user(user)
         save_cloud_snapshot()
         st.success("Daily verification complete.")
         return True

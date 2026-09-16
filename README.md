@@ -29,6 +29,7 @@ Open the URL printed by Streamlit (normally `http://localhost:8501`). The app se
 
 - Customer, farmer, and admin workspace selection
 - Farmer Registration System (FRS) with username login, farmer registration, hashed passwords, and sign-out
+- Registered email addresses, usernames, roles, and hashed passwords are stored in SQLite for later logins
 - Farmer FRS profile photo enrollment and farmer-only profile details
 - Daily farmer verification with camera access when optional face matching is available
 - Product browsing, search, category and organic filters
@@ -43,7 +44,7 @@ Open the URL printed by Streamlit (normally `http://localhost:8501`). The app se
 
 ### Demo sign-in accounts
 
-The zero-database demo seeds these accounts for local testing:
+The app seeds these accounts for local testing:
 
 | Role | Email | Password |
 | --- | --- | --- |
@@ -54,7 +55,7 @@ The zero-database demo seeds these accounts for local testing:
 
 New customer and farmer accounts can be registered from the sign-in screen. Signed-in farmers can publish listings with price, stock, description, and image URL; those images appear in the customer product cards. Customer orders are scoped to the signed-in account, while farmer listings are scoped to the signed-in farmer.
 
-Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. The base app is session-local and deploys without cloud credentials. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
+Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
 
 Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. If a deployment provides the optional `face-recognition` package, the enrolled farmer receives a daily camera verification gate; otherwise the app safely falls back to username/password login without failing.
 
