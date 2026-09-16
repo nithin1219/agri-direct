@@ -34,6 +34,7 @@ Open the URL printed by Streamlit (normally `http://localhost:8501`). The app se
 - Farmer FRS profile photo enrollment and farmer-only profile details
 - Daily farmer verification with camera access when optional face matching is available
 - Admin-only farmer FRS verification status and reset controls
+- Admin FRS camera capture and verification for a selected farmer
 - Product browsing, search, category and organic filters
 - Newly published farmer listings become visible to customers after marketplace refresh when shared bucket storage is configured
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs

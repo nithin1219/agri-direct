@@ -700,6 +700,24 @@ def admin_view():
             [user["email"] for user in farmer_users],
             key="admin-farmer-account",
         )
+        selected_profile = st.session_state.users[selected_farmer]
+        admin_camera_photo = st.camera_input(
+            "Admin FRS camera access: capture the selected farmer",
+            help="Camera access is used only for this verification attempt.",
+            key="admin-frs-camera",
+        )
+        if admin_camera_photo:
+            if face_recognition is None:
+                st.warning("Face matching is not installed in this deployment. Install the optional face-recognition package to verify camera captures.")
+            elif not selected_profile.get("face_encoding"):
+                st.error("This farmer has no enrolled face profile. Register the farmer with an FRS photo first.")
+            elif verify_face(admin_camera_photo.getvalue(), selected_profile["face_encoding"]):
+                selected_profile["last_face_verification"] = date.today().isoformat()
+                save_database_user(selected_profile)
+                save_cloud_snapshot()
+                st.success(f"FRS camera verification completed for @{selected_profile['username']}.")
+            else:
+                st.error("FRS camera verification failed. Use one clear face and good lighting.")
         if st.button("Require verification again today", key="admin-reset-farmer-verification"):
             farmer = st.session_state.users[selected_farmer]
             farmer["last_face_verification"] = None
