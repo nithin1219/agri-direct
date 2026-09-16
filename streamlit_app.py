@@ -134,6 +134,33 @@ def save_cloud_snapshot():
         return
 
 
+def sync_cloud_snapshot():
+    """Refresh shared marketplace data without disturbing the signed-in session."""
+    snapshot = load_cloud_snapshot()
+    if not snapshot:
+        return False
+    if snapshot.get("products"):
+        st.session_state.products = snapshot["products"]
+        for product in st.session_state.products:
+            product["image_bytes"] = _decode_bytes(product.get("image_bytes"))
+    if snapshot.get("users"):
+        current_email = st.session_state.get("authenticated_user")
+        st.session_state.users = snapshot["users"]
+        for user in st.session_state.users.values():
+            user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
+        if current_email and current_email not in st.session_state.users:
+            st.session_state.authenticated_user = None
+    if snapshot.get("orders") is not None:
+        st.session_state.orders = snapshot["orders"]
+    st.session_state.next_product_id = max(
+        (product.get("id", 0) for product in st.session_state.products), default=0
+    ) + 1
+    st.session_state.next_order_id = max(
+        (order.get("id", 1000) for order in st.session_state.orders), default=1000
+    ) + 1
+    return True
+
+
 def seed_state():
     """Create a fresh in-memory marketplace for the current browser session."""
     snapshot = load_cloud_snapshot()
@@ -307,8 +334,14 @@ def show_product_card(product):
 
 
 def customer_view():
+    sync_cloud_snapshot()
     st.title("🌱 Shop directly from local farms")
     st.write("Fresh produce, fair prices, and transparent farmer relationships.")
+    if st.button("Refresh marketplace listings", help="Load the newest farmer listings from shared storage."):
+        if sync_cloud_snapshot():
+            st.success("Latest farmer listings are now visible.")
+            st.rerun()
+        st.info("Shared storage is not configured; this demo is using the current session's listings.")
     cart_count = sum(st.session_state.cart.values())
     tabs = st.tabs(["Browse products", f"Cart ({cart_count})", "My orders"])
 
