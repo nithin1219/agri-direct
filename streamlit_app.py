@@ -671,7 +671,7 @@ def admin_view():
     st.title("🛡️ Admin dashboard")
     st.caption("Admin-only controls for farmer FRS verification and marketplace operations.")
     st.info("Admin login: admin@agridirect.local (or username `admin`) · password: `admin123`")
-    customers = 1
+    customers = sum(1 for user in st.session_state.users.values() if user["role"] == "Customer")
     farmers = len({p["farmer_id"] for p in st.session_state.products})
     revenue = sum(order["total"] for order in st.session_state.orders)
     columns = st.columns(4)
@@ -679,6 +679,17 @@ def admin_view():
     columns[1].metric("Farmers", farmers)
     columns[2].metric("Orders", len(st.session_state.orders))
     columns[3].metric("Session revenue", money(revenue))
+    st.subheader("Registered accounts")
+    account_rows = [
+        {
+            "Username": f"@{user['username']}",
+            "Email": user["email"],
+            "Role": user["role"],
+            "FRS photo": "Saved" if user.get("frs_photo") else "Not required",
+        }
+        for user in st.session_state.users.values()
+    ]
+    st.dataframe(pd.DataFrame(account_rows), use_container_width=True, hide_index=True)
     st.subheader("Farmer FRS verification")
     farmer_users = [
         user for user in st.session_state.users.values() if user["role"] == "Farmer"
@@ -730,6 +741,23 @@ def admin_view():
     st.subheader("Marketplace inventory")
     inventory = pd.DataFrame(st.session_state.products)
     st.dataframe(inventory[["name", "category", "farmer", "price", "stock", "organic"]], use_container_width=True, hide_index=True)
+    if st.session_state.products:
+        selected_product = st.selectbox(
+            "Product to moderate",
+            [product["id"] for product in st.session_state.products],
+            format_func=lambda product_id: next(
+                product["name"] for product in st.session_state.products if product["id"] == product_id
+            ),
+            key="admin-product-moderation",
+        )
+        if st.button("Remove product from marketplace", key="admin-remove-product"):
+            st.session_state.products = [
+                product for product in st.session_state.products if product["id"] != selected_product
+            ]
+            st.session_state.cart.pop(selected_product, None)
+            save_cloud_snapshot()
+            st.success("Product removed from the customer marketplace.")
+            st.rerun()
     if st.session_state.orders:
         st.subheader("Recent orders")
         order_data = [{"Order": o["id"], "Date": o["created"], "Total": money(o["total"]), "Status": o["status"], "Payment": o["payment"]} for o in st.session_state.orders]
@@ -781,7 +809,7 @@ def main():
     if st.sidebar.button("Sign out", use_container_width=True):
         st.session_state.authenticated_user = None
         st.rerun()
-    if st.sidebar.button("Reset demo data"):
+    if role == "Admin" and st.sidebar.button("Reset demo data"):
         for key in ["products", "cart", "orders", "next_product_id", "next_order_id"]:
             st.session_state.pop(key, None)
         st.rerun()
