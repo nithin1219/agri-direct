@@ -36,7 +36,7 @@ DEMO_ACCOUNTS = {
     "orchard@agridirect.local": ("Farmer", "orchard123", "sunrise"),
     "admin@agridirect.local": ("Admin", "admin123", "admin"),
 }
-FARM_BACKGROUND = "https://images.unsplash.com/photo-1500382017468-9049fed747ef?w=1800"
+FARM_BACKGROUND = "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=2200&q=85"
 def password_hash(password, salt=None):
     salt = salt or secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
