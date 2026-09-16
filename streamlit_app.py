@@ -31,6 +31,10 @@ try:
     import face_recognition
 except ImportError:
     face_recognition = None
+try:
+    import numpy as np
+except ImportError:
+    np = None
 
 
 st.set_page_config(
@@ -75,6 +79,10 @@ def initialize_database():
             )
             """
         )
+        columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
+        if "frs_enabled" not in columns:
+            connection.execute("ALTER TABLE users ADD COLUMN frs_enabled INTEGER NOT NULL DEFAULT 0")
+            connection.execute("UPDATE users SET frs_enabled = 1 WHERE role IN ('Farmer', 'Admin')")
         connection.commit()
 
 
@@ -100,6 +108,7 @@ def load_database_users():
             "frs_photo_name": row["frs_photo_name"],
             "face_encoding": encoding,
             "last_face_verification": row["last_face_verification"],
+            "frs_enabled": bool(row["frs_enabled"]),
         }
     return users
 
@@ -111,8 +120,8 @@ def save_database_user(user):
             connection.execute(
             """
             INSERT INTO users
-                (email, username, role, password_hash, frs_photo, frs_photo_name, face_encoding, last_face_verification)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                (email, username, role, password_hash, frs_photo, frs_photo_name, face_encoding, last_face_verification, frs_enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(email) DO UPDATE SET
                 username=excluded.username,
                 role=excluded.role,
@@ -120,7 +129,8 @@ def save_database_user(user):
                 frs_photo=excluded.frs_photo,
                 frs_photo_name=excluded.frs_photo_name,
                 face_encoding=excluded.face_encoding,
-                last_face_verification=excluded.last_face_verification
+                last_face_verification=excluded.last_face_verification,
+                frs_enabled=excluded.frs_enabled
             """,
                 (
                     user["email"],
@@ -131,6 +141,7 @@ def save_database_user(user):
                     user.get("frs_photo_name"),
                     json.dumps(user.get("face_encoding")) if user.get("face_encoding") else None,
                     user.get("last_face_verification"),
+                    int(user.get("frs_enabled", user["role"] in {"Farmer", "Admin"})),
                 ),
             )
             connection.commit()
@@ -224,11 +235,11 @@ def face_encoding(image_bytes):
 
 
 def verify_face(image_bytes, reference):
-    if face_recognition is None or not reference:
+    if face_recognition is None or np is None or not reference:
         return False
     try:
         candidate = face_encoding(image_bytes)
-        return bool(candidate and face_recognition.compare_faces([reference], candidate, tolerance=0.48)[0])
+        return bool(candidate and face_recognition.compare_faces([np.asarray(reference)], np.asarray(candidate), tolerance=0.48)[0])
     except (OSError, ValueError):
         return False
 
@@ -280,6 +291,7 @@ def sync_cloud_snapshot():
         st.session_state.users = snapshot["users"]
         for user in st.session_state.users.values():
             user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
+            user.setdefault("frs_enabled", user.get("role") in {"Farmer", "Admin"})
         if current_email and current_email not in st.session_state.users:
             st.session_state.authenticated_user = None
     if snapshot.get("orders") is not None:
@@ -319,7 +331,13 @@ def seed_state():
     )
     if "users" not in st.session_state:
         st.session_state.users = load_database_users() or {
-            email: {"email": email, "role": role, "username": username, "password": password_hash(password)}
+            email: {
+                "email": email,
+                "role": role,
+                "username": username,
+                "password": password_hash(password),
+                "frs_enabled": role in {"Farmer", "Admin"},
+            }
             for email, (role, password, username) in DEMO_ACCOUNTS.items()
         }
         if snapshot and snapshot.get("users"):
@@ -393,6 +411,7 @@ def authentication_view():
                     "frs_photo": farmer_photo.getvalue() if farmer_photo else None,
                     "frs_photo_name": farmer_photo.name if farmer_photo else None,
                     "face_encoding": face_encoding(farmer_photo.getvalue()) if farmer_photo and account_role == "Farmer" else None,
+                    "frs_enabled": account_role == "Farmer",
                     "otp_hash": password_hash(otp),
                     "otp_expires": datetime.now() + timedelta(minutes=10),
                 }
@@ -438,12 +457,21 @@ def current_user():
 
 def daily_farmer_verification():
     user = current_user()
-    if user["role"] != "Farmer" or user.get("last_face_verification") == date.today().isoformat():
+    if user["role"] not in {"Farmer", "Admin"} or not user.get("frs_enabled", True):
         return True
-    st.subheader("Daily farmer verification")
+    if user.get("last_face_verification") == date.today().isoformat():
+        return True
+    st.subheader(f"Daily {user['role'].lower()} FRS verification")
     if face_recognition is None or not user.get("face_encoding"):
-        st.info("Face matching is not enabled in this deployment. Continue with your secure farmer login.")
+        st.info("Live camera access is active. Native face matching is unavailable, so secure login plus today's camera capture is used.")
+        camera_capture = st.camera_input("Allow camera access and capture your face to continue")
+        if not camera_capture:
+            st.warning("Camera access is required for today's FRS verification.")
+            return False
         user["last_face_verification"] = date.today().isoformat()
+        save_database_user(user)
+        save_cloud_snapshot()
+        st.success("Daily FRS camera verification complete.")
         return True
     photo = st.camera_input("Allow camera access and capture your face to continue")
     if not photo:
@@ -701,6 +729,7 @@ def admin_view():
                 "Email": user["email"],
                 "Profile photo": "Saved" if user.get("frs_photo") else "Missing",
                 "Face matching": "Enabled" if user.get("face_encoding") else "Optional/unavailable",
+                "FRS": "Active" if user.get("frs_enabled", True) else "Disabled",
                 "Last daily verification": user.get("last_face_verification") or "Not verified today",
             }
             for user in farmer_users
@@ -735,6 +764,18 @@ def admin_view():
             save_database_user(farmer)
             save_cloud_snapshot()
             st.success(f"Daily verification reset for @{farmer['username']}.")
+            st.rerun()
+        frs_enabled = selected_profile.get("frs_enabled", True)
+        if st.button(
+            "Disable FRS for this farmer" if frs_enabled else "Activate FRS for this farmer",
+            key="admin-toggle-farmer-frs",
+        ):
+            selected_profile["frs_enabled"] = not frs_enabled
+            save_database_user(selected_profile)
+            save_cloud_snapshot()
+            st.success(
+                f"FRS {'activated' if selected_profile['frs_enabled'] else 'disabled'} for @{selected_profile['username']}."
+            )
             st.rerun()
     else:
         st.info("No farmer accounts have been registered yet.")
