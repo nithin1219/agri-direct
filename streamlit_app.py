@@ -15,6 +15,7 @@ import secrets
 import smtplib
 from datetime import timedelta
 from email.message import EmailMessage
+from email.utils import parseaddr
 import sqlite3
 
 import pandas as pd
@@ -163,42 +164,49 @@ def password_matches(password, stored_hash):
 
 
 def email_config():
+    defaults = {
+        "host": os.getenv("SMTP_HOST"),
+        "port": int(os.getenv("SMTP_PORT", "587")),
+        "username": os.getenv("SMTP_USERNAME"),
+        "password": os.getenv("SMTP_PASSWORD"),
+        "sender": os.getenv("SMTP_SENDER") or os.getenv("SMTP_USERNAME"),
+    }
     try:
         source = st.secrets
-        return {
-            "host": source.get("SMTP_HOST") or os.getenv("SMTP_HOST"),
-            "port": int(source.get("SMTP_PORT") or os.getenv("SMTP_PORT", "587")),
-            "username": source.get("SMTP_USERNAME") or os.getenv("SMTP_USERNAME"),
-            "password": source.get("SMTP_PASSWORD") or os.getenv("SMTP_PASSWORD"),
-            "sender": source.get("SMTP_SENDER") or os.getenv("SMTP_SENDER"),
-        }
+        section = source.get("smtp", {})
+        if not hasattr(section, "get"):
+            section = {}
+        for key in ("host", "port", "username", "password", "sender"):
+            value = section.get(key) or source.get(f"SMTP_{key.upper()}")
+            if value not in (None, ""):
+                defaults[key] = int(value) if key == "port" else value
     except (FileNotFoundError, KeyError, TypeError, ValueError):
-        return {
-            "host": os.getenv("SMTP_HOST"),
-            "port": int(os.getenv("SMTP_PORT", "587")),
-            "username": os.getenv("SMTP_USERNAME"),
-            "password": os.getenv("SMTP_PASSWORD"),
-            "sender": os.getenv("SMTP_SENDER"),
-        }
+        pass
+    return defaults
 
 
 def send_email_otp(recipient, otp):
     config = email_config()
     if not all([config["host"], config["username"], config["password"], config["sender"]]):
-        return False, "Email delivery is not configured."
+        return False, "Email delivery is not configured. Add SMTP secrets before registering."
+    address = parseaddr(recipient)[1]
+    if not address or "@" not in address:
+        return False, "Enter a valid recipient email address."
     message = EmailMessage()
     message["Subject"] = "AgriDirect email verification code"
     message["From"] = config["sender"]
-    message["To"] = recipient
+    message["To"] = address
     message.set_content(f"Your AgriDirect verification code is {otp}. It expires in 10 minutes.")
     try:
-        with smtplib.SMTP(config["host"], config["port"], timeout=15) as server:
-            server.starttls()
+        client = smtplib.SMTP_SSL if config["port"] == 465 else smtplib.SMTP
+        with client(config["host"], config["port"], timeout=15) as server:
+            if config["port"] != 465:
+                server.starttls()
             server.login(config["username"], config["password"])
             server.send_message(message)
         return True, "Verification code sent to your email."
-    except (OSError, smtplib.SMTPException):
-        return False, "Unable to send email right now. Check SMTP settings and try again."
+    except (OSError, smtplib.SMTPException) as error:
+        return False, f"Unable to send email. Check SMTP settings: {error}"
 
 
 def _encode_bytes(value):
@@ -405,6 +413,10 @@ def authentication_view():
             else:
                 otp = f"{secrets.randbelow(1_000_000):06d}"
                 delivered, message = send_email_otp(normalized_email, otp)
+                if not delivered:
+                    st.error(message)
+                    st.info("Configure SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, and SMTP_SENDER in Streamlit secrets, then retry.")
+                    return
                 st.session_state.pending_registration = {
                     "email": normalized_email, "role": account_role, "username": username,
                     "password": password_hash(new_password),
@@ -415,11 +427,7 @@ def authentication_view():
                     "otp_hash": password_hash(otp),
                     "otp_expires": datetime.now() + timedelta(minutes=10),
                 }
-                if delivered:
-                    st.success(message)
-                else:
-                    st.warning(message)
-                    st.info("Demo mode: SMTP is not configured. Use this one-time code: " + otp)
+                st.success(message)
         pending = st.session_state.get("pending_registration")
         if pending:
             with st.form("verify-email-form"):

@@ -67,7 +67,18 @@ Customer orders are shown only to the signed-in customer, and farmer listings ar
 
 ### Email OTP setup
 
-Set these Streamlit secrets or deployment environment variables for real email delivery: `SMTP_HOST`, `SMTP_PORT` (normally `587`), `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_SENDER`. Codes expire after 10 minutes and are stored only as a hash until verification. If SMTP is not configured, the app remains usable in demo mode and displays the one-time code on the registration screen instead of failing.
+Configure these Streamlit secrets on **each deployed app** for real delivery to the email address entered during registration:
+
+```toml
+[smtp]
+host = "smtp.gmail.com"
+port = 587
+username = "your-sender@gmail.com"
+password = "your-provider-app-password"
+sender = "your-sender@gmail.com"
+```
+
+The equivalent environment variables are `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_SENDER`. For Gmail, use a Google app password rather than the normal account password; never commit it to Git. Port `587` uses STARTTLS and port `465` uses SSL. Codes expire after 10 minutes and are stored only as a hash until verification. Registration is blocked with a clear configuration error until SMTP is configured, so OTPs are never exposed in the UI.
 
 Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. If a deployment provides the optional `face-recognition` package, the enrolled farmer receives a daily camera verification gate; otherwise the app safely falls back to username/password login without failing.
 
