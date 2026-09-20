@@ -36,6 +36,19 @@ The single seeded administrator account is:
 
 Use that account from any device after opening the shared LAN link to manage users, FRS controls, products, and orders. Change this demo password before using the app for real users.
 
+### Production admin account
+
+For a real administrator, configure secrets on the deployed app; do not commit the password:
+
+```toml
+[admin]
+email = "admin@your-domain.com"
+username = "your-admin-username"
+password = "use-a-long-unique-password"
+```
+
+The equivalent environment variables are `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD`. On the next app start, this account is created or updated as an `Admin` account, its password is stored as a PBKDF2 hash in SQLite, and it can sign in from the local LAN link or the public deployment. The demo admin remains only as a local fallback when production admin secrets are not configured.
+
 The app seeds sample products and stores cart, orders, listings, and status updates in the current browser session.
 
 ## Deploy on Streamlit Community Cloud

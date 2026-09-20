@@ -163,6 +163,31 @@ def password_matches(password, stored_hash):
     return secrets.compare_digest(actual, expected)
 
 
+def configured_admin_account():
+    values = {
+        "email": os.getenv("ADMIN_EMAIL"),
+        "username": os.getenv("ADMIN_USERNAME"),
+        "password": os.getenv("ADMIN_PASSWORD"),
+    }
+    try:
+        section = st.secrets.get("admin", {})
+        if hasattr(section, "get"):
+            for key in values:
+                values[key] = section.get(key) or values[key]
+        for key in values:
+            values[key] = st.secrets.get(f"ADMIN_{key.upper()}") or values[key]
+    except (FileNotFoundError, KeyError, TypeError):
+        pass
+    if not all(values.values()) or len(values["password"]) < 8:
+        return None
+    return {
+        "email": values["email"].strip().lower(),
+        "username": values["username"].strip().lower(),
+        "role": "Admin",
+        "password": values["password"],
+    }
+
+
 def email_config():
     defaults = {
         "host": os.getenv("SMTP_HOST"),
@@ -354,6 +379,19 @@ def seed_state():
                 user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
         for user in st.session_state.users.values():
             save_database_user(user)
+    admin = configured_admin_account()
+    if admin:
+        existing = st.session_state.users.get(admin["email"], {})
+        account = {
+            **existing,
+            "email": admin["email"],
+            "username": admin["username"],
+            "role": "Admin",
+            "password": password_hash(admin["password"]),
+            "frs_enabled": True,
+        }
+        st.session_state.users[admin["email"]] = account
+        save_database_user(account)
     st.session_state.setdefault("authenticated_user", None)
 
 
@@ -706,7 +744,11 @@ def farmer_view():
 def admin_view():
     st.title("🛡️ Admin dashboard")
     st.caption("Admin-only controls for farmer FRS verification and marketplace operations.")
-    st.info("Admin login: admin@agridirect.local (or username `admin`) · password: `admin123`")
+    configured_admin = configured_admin_account()
+    if configured_admin:
+        st.info(f"Configured admin login: `{configured_admin['email']}` (or `{configured_admin['username']}`).")
+    else:
+        st.info("Demo admin login: `admin@agridirect.local` (or `admin`) · password: `admin123`. Configure a real admin in Streamlit secrets before production use.")
     customers = sum(1 for user in st.session_state.users.values() if user["role"] == "Customer")
     farmers = len({p["farmer_id"] for p in st.session_state.products})
     revenue = sum(order["total"] for order in st.session_state.orders)
