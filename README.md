@@ -49,7 +49,7 @@ password = "use-a-long-unique-password"
 
 The equivalent environment variables are `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD`. On the next app start, this account is created or updated as an `Admin` account, its password is stored as a PBKDF2 hash in SQLite, and it can sign in from the local LAN link or the public deployment. The demo admin remains only as a local fallback when production admin secrets are not configured.
 
-The app seeds sample products and stores cart, orders, listings, and status updates in the current browser session.
+The app seeds sample products and stores cart, orders, listings, and status updates in the current browser session. Verified registrations are saved once in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`); the app checks that database before sending another OTP, so an existing email or username cannot be registered again after restart or from another browser.
 
 ## Deploy on Streamlit Community Cloud
 

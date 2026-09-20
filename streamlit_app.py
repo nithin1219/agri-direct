@@ -151,6 +151,19 @@ def save_database_user(user):
     return True
 
 
+def database_account_exists(email, username):
+    try:
+        initialize_database()
+        with database_connection() as connection:
+            row = connection.execute(
+                "SELECT 1 FROM users WHERE lower(email) = ? OR lower(username) = ? LIMIT 1",
+                (email.strip().lower(), username.strip().lower()),
+            ).fetchone()
+        return row is not None
+    except sqlite3.Error:
+        return False
+
+
 def password_hash(password, salt=None):
     salt = salt or secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
@@ -442,7 +455,7 @@ def authentication_view():
                 st.error("Password must be at least 8 characters.")
             elif new_password != confirm_password:
                 st.error("Passwords do not match.")
-            elif normalized_email in st.session_state.users:
+            elif normalized_email in st.session_state.users or database_account_exists(normalized_email, username):
                 st.error("An account with that email already exists.")
             elif any(user["username"] == username for user in st.session_state.users.values()):
                 st.error("That username is already taken.")
@@ -479,7 +492,9 @@ def authentication_view():
                 else:
                     account = {key: pending[key] for key in ["email", "role", "username", "password", "frs_photo", "frs_photo_name", "face_encoding"]}
                     st.session_state.users[account["email"]] = account
-                    save_database_user(account)
+                    if not save_database_user(account):
+                        st.error("Your account could not be saved. Check the database location and try again.")
+                        return
                     save_cloud_snapshot()
                     st.session_state.pop("pending_registration", None)
                     st.session_state.authenticated_user = account["email"]
