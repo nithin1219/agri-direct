@@ -16,7 +16,19 @@ python -m venv .venv
 .venv/bin/python -m streamlit run streamlit_app.py
 ```
 
-Open the URL printed by Streamlit (normally `http://localhost:8501`). The app seeds sample products and stores cart, orders, listings, and status updates in the current browser session.
+Open `http://localhost:8501` on the same computer. The repository includes `.streamlit/config.toml`, which binds Streamlit to `0.0.0.0` on port `8501` so the app can also be opened from another device on the same network.
+
+To find the host computer's private IP address:
+
+```powershell
+# Windows
+ipconfig
+# Use the IPv4 Address, for example 192.168.1.25
+```
+
+Then open `http://192.168.1.25:8501` from a phone or another computer on the same Wi-Fi/LAN. If Windows Firewall asks, allow Python/Streamlit on the **Private networks** profile. Do not expose this development server directly to the public internet; use Streamlit Community Cloud or a properly secured reverse proxy for public access.
+
+The app seeds sample products and stores cart, orders, listings, and status updates in the current browser session.
 
 ## Deploy on Streamlit Community Cloud
 
@@ -24,6 +36,8 @@ Open the URL printed by Streamlit (normally `http://localhost:8501`). The app se
 2. In [Streamlit Community Cloud](https://share.streamlit.io/), select the repository and the `main` branch.
 3. Set **Main file path** to `streamlit_app.py`.
 4. Deploy. Community Cloud installs the root `requirements.txt` automatically.
+
+The public Community Cloud address remains the deployment URL assigned by Streamlit; the local IP address is only for a computer running Streamlit itself.
 
 ## Included marketplace flows
 
