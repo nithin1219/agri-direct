@@ -39,6 +39,14 @@ The app seeds sample products and stores cart, orders, listings, and status upda
 
 The public Community Cloud address remains the deployment URL assigned by Streamlit; the local IP address is only for a computer running Streamlit itself.
 
+### Always-on access
+
+Use the deployed Community Cloud address for access from any device at any time:
+
+`https://agri-direct-nithin-1.streamlit.app/`
+
+`localhost` and private IP links are not public hosting. They work only while the host computer is powered on, connected to the network, and running Streamlit; they cannot provide guaranteed 24/7 access after the computer sleeps, shuts down, loses its network connection, or closes the Streamlit process. For a permanent custom domain or guaranteed uptime, deploy the same app on an always-on server or managed hosting service.
+
 ## Included marketplace flows
 
 - Customer, farmer, and admin workspace selection
