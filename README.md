@@ -26,7 +26,15 @@ ipconfig
 # Use the IPv4 Address, for example 192.168.1.25
 ```
 
-Then open `http://192.168.1.25:8501` from a phone or another computer on the same Wi-Fi/LAN. If Windows Firewall asks, allow Python/Streamlit on the **Private networks** profile. Do not expose this development server directly to the public internet; use Streamlit Community Cloud or a properly secured reverse proxy for public access.
+Then open `http://<host-ip>:8501` from each phone, laptop, or desktop on the same Wi-Fi/LAN. For the current host network, the link is `http://172.20.10.2:8501`. Every device uses the same link, but each browser gets its own Streamlit session and login. If Windows Firewall asks, allow Python/Streamlit on the **Private networks** profile. Do not expose this development server directly to the public internet; use Streamlit Community Cloud or a properly secured reverse proxy for public access.
+
+The single seeded administrator account is:
+
+| Login | Password |
+| --- | --- |
+| `admin` or `admin@agridirect.local` | `admin123` |
+
+Use that account from any device after opening the shared LAN link to manage users, FRS controls, products, and orders. Change this demo password before using the app for real users.
 
 The app seeds sample products and stores cart, orders, listings, and status updates in the current browser session.
 
