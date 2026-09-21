@@ -47,7 +47,7 @@ username = "your-admin-username"
 password = "use-a-long-unique-password"
 ```
 
-The equivalent environment variables are `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD`. On the next app start, this account is created or updated as an `Admin` account, its password is stored as a PBKDF2 hash in SQLite, and it can sign in from the local LAN link or the public deployment. The demo admin remains only as a local fallback when production admin secrets are not configured.
+The equivalent environment variables are `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD`. Set `ADMIN_EMAIL` to the email address used by the Streamlit app owner. On the next app start, that account is created or updated as the **only** `Admin` account, its password is stored as a PBKDF2 hash in SQLite, and it can sign in from the local LAN link or the public deployment. Any older or duplicate Admin accounts are removed; Customer and Farmer accounts are not affected. The demo admin remains the single local fallback only when production admin secrets are not configured.
 
 The app stores registrations and marketplace snapshots (products, orders, and uploaded image bytes) in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`). This means a new account or listing is available to later Streamlit sessions on the same deployment, and a saved account is not created again. Configure `AGRI_S3_BUCKET` plus AWS credentials for best-effort shared snapshots across multiple app replicas/devices; without shared storage, all replicas must use the same SQLite file. Cart contents remain browser-session scoped.
 

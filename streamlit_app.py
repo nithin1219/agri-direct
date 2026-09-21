@@ -164,6 +164,37 @@ def save_database_user(user):
     return True
 
 
+def delete_database_user(email):
+    try:
+        initialize_database()
+        with database_connection() as connection:
+            connection.execute("DELETE FROM users WHERE email = ?", (email,))
+            connection.commit()
+    except sqlite3.Error:
+        return False
+    return True
+
+
+def enforce_single_admin(users, configured_admin=None):
+    """Keep exactly one administrator, preferring the configured owner account."""
+    admin_emails = sorted(
+        email for email, user in users.items() if user.get("role") == "Admin"
+    )
+    if configured_admin:
+        canonical_email = configured_admin["email"]
+    elif "admin@agridirect.local" in users and users["admin@agridirect.local"].get("role") == "Admin":
+        canonical_email = "admin@agridirect.local"
+    elif admin_emails:
+        canonical_email = admin_emails[0]
+    else:
+        return users
+    for email in admin_emails:
+        if email != canonical_email:
+            users.pop(email, None)
+            delete_database_user(email)
+    return users
+
+
 def database_account_exists(email, username):
     try:
         initialize_database()
@@ -359,6 +390,9 @@ def sync_cloud_snapshot():
         for user in st.session_state.users.values():
             user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
             user.setdefault("frs_enabled", user.get("role") in {"Farmer", "Admin"})
+        st.session_state.users = enforce_single_admin(
+            st.session_state.users, configured_admin_account()
+        )
         if current_email and current_email not in st.session_state.users:
             st.session_state.authenticated_user = None
     if snapshot.get("orders") is not None:
@@ -419,6 +453,7 @@ def seed_state():
         for user in st.session_state.users.values():
             save_database_user(user)
     admin = configured_admin_account()
+    st.session_state.users = enforce_single_admin(st.session_state.users, admin)
     if admin:
         existing = st.session_state.users.get(admin["email"], {})
         account = {
@@ -431,6 +466,10 @@ def seed_state():
         }
         st.session_state.users[admin["email"]] = account
         save_database_user(account)
+    else:
+        for user in st.session_state.users.values():
+            if user.get("role") == "Admin":
+                save_database_user(user)
     st.session_state.setdefault("authenticated_user", None)
     if not snapshot:
         save_cloud_snapshot()
