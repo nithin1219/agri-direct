@@ -434,6 +434,56 @@ def authentication_view():
     st.title("🌱 Welcome to AgriDirect")
     st.success("Welcome! Sign in to continue to your AgriDirect marketplace.")
     st.write("Use your registered email or username and password to shop, manage listings, or review marketplace operations.")
+    st.session_state.setdefault("login_voice_mode", False)
+    voice_left, voice_right = st.columns([4, 1])
+    with voice_left:
+        st.markdown("#### 🎙️ AI voice assistance")
+        st.caption("Choose a language and use your microphone or text to get help before signing in.")
+    with voice_right:
+        voice_label = "Voice help: ON" if st.session_state.login_voice_mode else "AI voice help"
+        if st.button(voice_label, type="primary" if st.session_state.login_voice_mode else "secondary", key="login-voice-toggle", use_container_width=True):
+            st.session_state.login_voice_mode = not st.session_state.login_voice_mode
+            st.rerun()
+    if st.session_state.login_voice_mode:
+        with st.container(border=True):
+            language = st.selectbox(
+                "Assistance language",
+                list(ASSISTANT_LANGUAGES),
+                key="login-assistant-language",
+            )
+            st.info(
+                f"Voice assistance is active in {language}. Allow microphone access, record your question, "
+                "then transcribe it. If recording is unavailable, type your request below."
+            )
+            audio_input = getattr(st, "audio_input", None)
+            if callable(audio_input):
+                audio = audio_input("Record a sign-in question (optional)", key="login-assistant-audio")
+                if audio and st.button("Transcribe sign-in help", key="transcribe-login-audio"):
+                    if speech_recognition is None:
+                        st.warning("Transcription support is unavailable; use the text box below.")
+                    else:
+                        try:
+                            recognizer = speech_recognition.Recognizer()
+                            with speech_recognition.AudioFile(io.BytesIO(audio.getvalue())) as source:
+                                transcript = recognizer.record(source)
+                            st.session_state["login-assistant-text"] = recognizer.recognize_google(
+                                transcript, language=ASSISTANT_LANGUAGES[language]
+                            )
+                            st.success("Voice request transcribed. Review the text below.")
+                        except (OSError, ValueError, speech_recognition.UnknownValueError, speech_recognition.RequestError):
+                            st.warning("The recording could not be transcribed. Please use the text fallback.")
+            else:
+                st.info("Microphone input is unavailable in this Streamlit version; text help is enabled.")
+            request = st.text_area(
+                "Voice transcript or text request",
+                key="login-assistant-text",
+                placeholder="Example: How do I sign in or create a farmer account?",
+            )
+            if st.button("Show sign-in instructions", key="login-assistant-submit"):
+                st.info(
+                    "Enter your registered email or username and password in the Sign in tab. "
+                    "Use Create account for a new customer or farmer account. Existing accounts are saved and cannot be registered twice."
+                )
     login_tab, register_tab = st.tabs(["Sign in", "Create account"])
     with login_tab:
         with st.form("login-form"):
