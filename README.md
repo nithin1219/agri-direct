@@ -51,7 +51,7 @@ The equivalent environment variables are `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `A
 
 ### Google sign-in setup
 
-Google sign-in is optional and requires Streamlit OIDC configuration in `.streamlit/secrets.toml` or the deployment Secrets panel:
+Google sign-in is optional and requires Streamlit `>=1.42` plus OIDC configuration in `.streamlit/secrets.toml` or the deployment Secrets panel. A safe placeholder is provided at `.streamlit/secrets.example.toml`; copy its values into Streamlit Cloud and replace every placeholder:
 
 ```toml
 [auth]

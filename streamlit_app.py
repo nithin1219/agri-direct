@@ -244,6 +244,17 @@ def configured_admin_account():
     }
 
 
+def google_auth_configured():
+    if not callable(getattr(st, "login", None)):
+        return False
+    try:
+        auth = st.secrets.get("auth", {})
+    except (FileNotFoundError, KeyError, TypeError, AttributeError):
+        return False
+    required = ("redirect_uri", "cookie_secret", "client_id", "client_secret", "server_metadata_url")
+    return hasattr(auth, "get") and all(str(auth.get(key, "")).strip() for key in required)
+
+
 def _encode_bytes(value):
     return base64.b64encode(value).decode("ascii") if isinstance(value, bytes) else value
 
@@ -434,7 +445,7 @@ def authentication_view():
     st.title("🌱 Welcome to AgriDirect")
     st.success("Welcome! Sign in to continue to your AgriDirect marketplace.")
     st.write("Use your registered email or username and password to shop, manage listings, or review marketplace operations.")
-    oidc_user = getattr(st, "user", None)
+    oidc_user = getattr(st, "user", None) if google_auth_configured() else None
     if oidc_user and getattr(oidc_user, "is_logged_in", False):
         google_email = str(getattr(oidc_user, "email", "")).strip().lower()
         if google_email and "@" in google_email:
@@ -560,14 +571,11 @@ def authentication_view():
             else:
                 st.error("Invalid email or password.")
         google_login = getattr(st, "login", None)
-        if callable(google_login):
+        if google_auth_configured():
             if st.button("Continue with Google", use_container_width=True, key="google-sign-in"):
-                try:
-                    google_login("google")
-                except Exception as error:
-                    st.error(f"Google sign-in is not configured for this deployment: {error}")
+                google_login("google")
         else:
-            st.info("Google sign-in requires a Streamlit version with OIDC support.")
+            st.info("Google sign-in is unavailable until Streamlit OIDC secrets are configured. Password sign-in remains available.")
         if st.button("Create account", use_container_width=True, key="create-account-below-signin"):
             st.session_state["show_create_account"] = True
             st.rerun()
