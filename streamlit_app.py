@@ -244,17 +244,6 @@ def configured_admin_account():
     }
 
 
-def google_auth_configured():
-    if not callable(getattr(st, "login", None)):
-        return False
-    try:
-        auth = st.secrets.get("auth", {})
-    except (FileNotFoundError, KeyError, TypeError, AttributeError):
-        return False
-    required = ("redirect_uri", "cookie_secret", "client_id", "client_secret", "server_metadata_url")
-    return hasattr(auth, "get") and all(str(auth.get(key, "")).strip() for key in required)
-
-
 def _encode_bytes(value):
     return base64.b64encode(value).decode("ascii") if isinstance(value, bytes) else value
 
@@ -445,29 +434,6 @@ def authentication_view():
     st.title("🌱 Welcome to AgriDirect")
     st.success("Welcome! Sign in to continue to your AgriDirect marketplace.")
     st.write("Use your registered email or username and password to shop, manage listings, or review marketplace operations.")
-    oidc_user = getattr(st, "user", None) if google_auth_configured() else None
-    if oidc_user and getattr(oidc_user, "is_logged_in", False):
-        google_email = str(getattr(oidc_user, "email", "")).strip().lower()
-        if google_email and "@" in google_email:
-            google_name = str(getattr(oidc_user, "name", "")).strip() or google_email.split("@")[0]
-            google_username = "".join(character for character in google_name.lower() if character.isalnum())[:24] or google_email.split("@")[0]
-            existing = st.session_state.users.get(google_email)
-            if not existing:
-                if any(user["username"] == google_username for user in st.session_state.users.values()):
-                    google_username = f"{google_username}-{secrets.token_hex(2)}"
-                existing = {
-                    "email": google_email,
-                    "role": "Customer",
-                    "username": google_username,
-                    "password": password_hash(secrets.token_urlsafe(24)),
-                    "frs_enabled": False,
-                }
-                st.session_state.users[google_email] = existing
-                save_database_user(existing)
-                save_cloud_snapshot()
-            st.session_state.authenticated_user = google_email
-            st.session_state.role = existing["role"]
-            st.rerun()
     st.session_state.setdefault("login_voice_mode", False)
     voice_left, voice_right = st.columns([4, 1])
     with voice_left:
@@ -570,12 +536,6 @@ def authentication_view():
                 st.rerun()
             else:
                 st.error("Invalid email or password.")
-        google_login = getattr(st, "login", None)
-        if google_auth_configured():
-            if st.button("Continue with Google", use_container_width=True, key="google-sign-in"):
-                google_login("google")
-        else:
-            st.info("Google sign-in is unavailable until Streamlit OIDC secrets are configured. Password sign-in remains available.")
         if st.button("Create account", use_container_width=True, key="create-account-below-signin"):
             st.session_state["show_create_account"] = True
             st.rerun()
