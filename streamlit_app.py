@@ -11,6 +11,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import secrets
 import sqlite3
 
@@ -32,6 +33,11 @@ try:
     import numpy as np
 except ImportError:
     np = None
+
+try:
+    import speech_recognition as speech_recognition
+except ImportError:
+    speech_recognition = None
 
 
 st.set_page_config(
@@ -80,6 +86,15 @@ def initialize_database():
         if "frs_enabled" not in columns:
             connection.execute("ALTER TABLE users ADD COLUMN frs_enabled INTEGER NOT NULL DEFAULT 0")
             connection.execute("UPDATE users SET frs_enabled = 1 WHERE role IN ('Farmer', 'Admin')")
+        connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS marketplace_state (
+                state_key TEXT PRIMARY KEY,
+                state_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+            """
+        )
         connection.commit()
 
 
@@ -160,6 +175,38 @@ def database_account_exists(email, username):
         return False
 
 
+def load_local_snapshot():
+    """Load marketplace data from the persistent SQLite store used by this deployment."""
+    try:
+        initialize_database()
+        with database_connection() as connection:
+            row = connection.execute(
+                "SELECT state_json FROM marketplace_state WHERE state_key = 'marketplace'"
+            ).fetchone()
+        return json.loads(row["state_json"]) if row else None
+    except (sqlite3.Error, TypeError, json.JSONDecodeError):
+        return None
+
+
+def save_local_snapshot(payload):
+    try:
+        initialize_database()
+        with database_connection() as connection:
+            connection.execute(
+                """
+                INSERT INTO marketplace_state (state_key, state_json, updated_at)
+                VALUES ('marketplace', ?, ?)
+                ON CONFLICT(state_key) DO UPDATE SET
+                    state_json=excluded.state_json, updated_at=excluded.updated_at
+                """,
+                (json.dumps(payload, default=str), datetime.now().isoformat()),
+            )
+            connection.commit()
+        return True
+    except (sqlite3.Error, TypeError, ValueError):
+        return False
+
+
 def password_hash(password, salt=None):
     salt = salt or secrets.token_hex(16)
     digest = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
@@ -225,9 +272,12 @@ def load_cloud_snapshot():
 def face_encoding(image_bytes):
     if face_recognition is None:
         return None
-    image = face_recognition.load_image_file(io.BytesIO(image_bytes))
-    encodings = face_recognition.face_encodings(image)
-    return encodings[0].tolist() if encodings else None
+    try:
+        image = face_recognition.load_image_file(io.BytesIO(image_bytes))
+        encodings = face_recognition.face_encodings(image)
+        return encodings[0].tolist() if encodings else None
+    except (OSError, ValueError, RuntimeError):
+        return None
 
 
 def verify_face(image_bytes, reference):
@@ -236,7 +286,7 @@ def verify_face(image_bytes, reference):
     try:
         candidate = face_encoding(image_bytes)
         return bool(candidate and face_recognition.compare_faces([np.asarray(reference)], np.asarray(candidate), tolerance=0.48)[0])
-    except (OSError, ValueError):
+    except (OSError, ValueError, RuntimeError):
         return False
 
 
@@ -252,16 +302,17 @@ def storage_config():
 
 
 def save_cloud_snapshot():
-    """Best-effort optional S3 snapshot; local session remains the source of truth."""
+    """Persist a complete snapshot locally and, when configured, to shared S3 storage."""
+    payload = {
+        "products": [{**product, "image_bytes": _encode_bytes(product.get("image_bytes"))} for product in st.session_state.products],
+        "users": {email: {**user, "frs_photo": _encode_bytes(user.get("frs_photo"))} for email, user in st.session_state.users.items()},
+        "orders": st.session_state.orders,
+    }
+    save_local_snapshot(payload)
     bucket, region = storage_config()
     if not bucket or boto3 is None:
         return
     try:
-        payload = {
-            "products": [{**product, "image_bytes": _encode_bytes(product.get("image_bytes"))} for product in st.session_state.products],
-            "users": {email: {**user, "frs_photo": _encode_bytes(user.get("frs_photo"))} for email, user in st.session_state.users.items()},
-            "orders": st.session_state.orders,
-        }
         boto3.client("s3", region_name=region).put_object(
             Bucket=bucket,
             Key="agridirect/state.json",
@@ -273,16 +324,32 @@ def save_cloud_snapshot():
         return
 
 
+def clear_persisted_marketplace():
+    try:
+        initialize_database()
+        with database_connection() as connection:
+            connection.execute("DELETE FROM marketplace_state WHERE state_key = 'marketplace'")
+            connection.commit()
+    except sqlite3.Error:
+        pass
+    bucket, region = storage_config()
+    if bucket and boto3 is not None:
+        try:
+            boto3.client("s3", region_name=region).delete_object(Bucket=bucket, Key="agridirect/state.json")
+        except (BotoCoreError, ClientError, OSError):
+            pass
+
+
 def sync_cloud_snapshot():
     """Refresh shared marketplace data without disturbing the signed-in session."""
-    snapshot = load_cloud_snapshot()
+    snapshot = load_cloud_snapshot() or load_local_snapshot()
     if not snapshot:
         return False
-    if snapshot.get("products"):
+    if snapshot.get("products") is not None:
         st.session_state.products = snapshot["products"]
         for product in st.session_state.products:
             product["image_bytes"] = _decode_bytes(product.get("image_bytes"))
-    if snapshot.get("users"):
+    if snapshot.get("users") is not None:
         current_email = st.session_state.get("authenticated_user")
         st.session_state.users = snapshot["users"]
         for user in st.session_state.users.values():
@@ -303,9 +370,9 @@ def sync_cloud_snapshot():
 
 def seed_state():
     """Create a fresh in-memory marketplace for the current browser session."""
-    snapshot = load_cloud_snapshot()
+    snapshot = load_cloud_snapshot() or load_local_snapshot()
     if "products" not in st.session_state:
-        st.session_state.products = (snapshot or {}).get("products") or [
+        seeded_products = [
             {"id": 1, "name": "Farm Fresh Tomatoes", "category": "Vegetables", "price": 48.0, "unit": "kg", "stock": 32, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Juicy, vine-ripened tomatoes harvested this morning.", "emoji": "🍅", "image_url": "https://images.unsplash.com/photo-1546094096-0df4bcaaa337?w=900"},
             {"id": 2, "name": "Alphonso Mangoes", "category": "Fruits", "price": 180.0, "unit": "kg", "stock": 18, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "organic": True, "description": "Naturally sweet seasonal mangoes from our orchard.", "emoji": "🥭", "image_url": "https://images.unsplash.com/photo-1553279768-865429fa0078?w=900"},
             {"id": 3, "name": "Organic Basmati Rice", "category": "Grains", "price": 125.0, "unit": "kg", "stock": 50, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Aromatic long-grain rice, grown without synthetic pesticides.", "emoji": "🌾", "image_url": "https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?w=900"},
@@ -313,6 +380,9 @@ def seed_state():
             {"id": 5, "name": "Fresh Spinach", "category": "Vegetables", "price": 35.0, "unit": "bunch", "stock": 40, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Tender leafy greens picked at sunrise.", "emoji": "🥬", "image_url": "https://images.unsplash.com/photo-1576045057995-568f588f82fb?w=900"},
             {"id": 6, "name": "Raw Forest Honey", "category": "Pantry", "price": 310.0, "unit": "500 g", "stock": 15, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "organic": True, "description": "Unfiltered wildflower honey collected from local hives.", "emoji": "🍯", "image_url": "https://images.unsplash.com/photo-1587049352846-4a222e784d38?w=900"},
         ]
+        st.session_state.products = (
+            snapshot["products"] if snapshot and "products" in snapshot else seeded_products
+        )
         for product in st.session_state.products:
             product["image_bytes"] = _decode_bytes(product.get("image_bytes"))
     st.session_state.setdefault("cart", {})
@@ -356,6 +426,8 @@ def seed_state():
         st.session_state.users[admin["email"]] = account
         save_database_user(account)
     st.session_state.setdefault("authenticated_user", None)
+    if not snapshot:
+        save_cloud_snapshot()
 
 
 def authentication_view():
@@ -412,6 +484,13 @@ def authentication_view():
             elif account_role == "Farmer" and not farmer_photo:
                 st.error("Farmer registration requires an FRS profile photo.")
             else:
+                enrolled_encoding = (
+                    face_encoding(farmer_photo.getvalue())
+                    if farmer_photo and account_role == "Farmer" else None
+                )
+                if account_role == "Farmer" and face_recognition is not None and not enrolled_encoding:
+                    st.error("No clear face was found in that photo. Upload one clear, front-facing farmer photo.")
+                    return
                 account = {
                     "email": normalized_email,
                     "role": account_role,
@@ -419,7 +498,7 @@ def authentication_view():
                     "password": password_hash(new_password),
                     "frs_photo": farmer_photo.getvalue() if farmer_photo else None,
                     "frs_photo_name": farmer_photo.name if farmer_photo else None,
-                    "face_encoding": face_encoding(farmer_photo.getvalue()) if farmer_photo and account_role == "Farmer" else None,
+                    "face_encoding": enrolled_encoding,
                     "frs_enabled": account_role == "Farmer",
                 }
                 if not save_database_user(account):
@@ -435,6 +514,78 @@ def authentication_view():
 
 def money(value):
     return f"₹{value:,.2f}"
+
+
+ASSISTANT_LANGUAGES = {
+    "English": "en-IN",
+    "Telugu": "te-IN",
+    "Hindi": "hi-IN",
+    "Tamil": "ta-IN",
+    "Kannada": "kn-IN",
+    "Malayalam": "ml-IN",
+    "Bengali": "bn-IN",
+    "Marathi": "mr-IN",
+}
+
+
+def apply_listing_assistance(text):
+    """Use lightweight, dependency-free extraction to prefill a listing draft."""
+    text = text.strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    category = next(
+        (value for value in ["Vegetables", "Fruits", "Grains", "Pantry", "Dairy"]
+         if value[:-1].lower() in lowered or value.lower() in lowered),
+        None,
+    )
+    number = re.search(r"(?:₹|rs\.?|price\s*)\s*(\d+(?:\.\d+)?)", lowered)
+    stock = re.search(r"(?:stock|quantity|available)\s*(?:is|:)?\s*(\d+)", lowered)
+    unit = re.search(r"\b(kg|kilograms?|g|grams?|litres?|liters?|l|bunch(?:es)?)\b", lowered)
+    name = re.search(r"(?:product|crop|name)\s*(?:is|:)?\s*([a-z][\w -]{2,40})", lowered)
+    st.session_state["product-name-field"] = (name.group(1).strip(" .,") if name else text.split(",")[0][:50]).title()
+    st.session_state["product-description-field"] = text
+    if category:
+        st.session_state["product-category-field"] = category
+    if number:
+        st.session_state["product-price-field"] = float(number.group(1))
+    if stock:
+        st.session_state["product-stock-field"] = int(stock.group(1))
+    if unit:
+        st.session_state["product-unit-field"] = unit.group(1).lower().rstrip("s")
+    return True
+
+
+def listing_assistant():
+    st.subheader("AI / voice listing assistant")
+    language = st.selectbox("Assistant language", list(ASSISTANT_LANGUAGES), key="assistant-language")
+    st.caption("Describe your crop or product in your language. The assistant provides draft field values; review them before publishing.")
+    audio_input = getattr(st, "audio_input", None)
+    if callable(audio_input):
+        audio = audio_input("Record a description (optional)", key="listing-audio")
+        if audio and st.button("Transcribe recording", key="transcribe-listing-audio"):
+            if speech_recognition is None:
+                st.warning("Voice transcription is unavailable. Install the optional speech_recognition package, or use the text box below.")
+            else:
+                try:
+                    recognizer = speech_recognition.Recognizer()
+                    with speech_recognition.AudioFile(io.BytesIO(audio.getvalue())) as source:
+                        transcript = recognizer.record(source)
+                    st.session_state["listing-assistant-text"] = recognizer.recognize_google(
+                        transcript, language=ASSISTANT_LANGUAGES[language]
+                    )
+                    st.success("Recording transcribed. Review the text and apply it to the draft.")
+                except (OSError, ValueError, speech_recognition.UnknownValueError, speech_recognition.RequestError):
+                    st.warning("The recording could not be transcribed. Please use the text fallback.")
+    else:
+        st.info("Microphone input is not available in this Streamlit version; text fallback is enabled.")
+    assistant_text = st.text_area(
+        "Text fallback / transcript",
+        key="listing-assistant-text",
+        placeholder="Example: Product is tomatoes, price 60 per kg, stock 25, vegetables.",
+    )
+    if st.button("Apply details to listing draft", key="apply-listing-assistance") and apply_listing_assistance(assistant_text):
+        st.success("Draft fields filled. Review all values before publishing.")
 
 
 def current_role():
@@ -453,7 +604,7 @@ def daily_farmer_verification():
     if user.get("last_face_verification") == date.today().isoformat():
         return True
     st.subheader(f"Daily {user['role'].lower()} FRS verification")
-    if face_recognition is None or not user.get("face_encoding"):
+    if face_recognition is None:
         st.info("Live camera access is active. Native face matching is unavailable, so secure login plus today's camera capture is used.")
         camera_capture = st.camera_input("Allow camera access and capture your face to continue")
         if not camera_capture:
@@ -464,6 +615,9 @@ def daily_farmer_verification():
         save_cloud_snapshot()
         st.success("Daily FRS camera verification complete.")
         return True
+    if not user.get("face_encoding"):
+        st.error("Native face verification is enabled, but this farmer has no enrolled face profile. Ask an administrator to reset enrollment.")
+        return False
     photo = st.camera_input("Allow camera access and capture your face to continue")
     if not photo:
         st.warning("Camera access is required for today's farmer dashboard verification.")
@@ -518,9 +672,9 @@ def customer_view():
     st.write("Fresh produce, fair prices, and transparent farmer relationships.")
     if st.button("Refresh marketplace listings", help="Load the newest farmer listings from shared storage."):
         if sync_cloud_snapshot():
-            st.success("Latest farmer listings are now visible.")
+            st.success("Latest persisted listings are now visible.")
             st.rerun()
-        st.info("Shared storage is not configured; this demo is using the current session's listings.")
+        st.info("No persisted snapshot is available yet; showing this deployment's local marketplace.")
     cart_count = sum(st.session_state.cart.values())
     tabs = st.tabs(["Browse products", f"Cart ({cart_count})", "My orders"])
 
@@ -628,6 +782,7 @@ def render_orders():
 
 
 def farmer_view():
+    sync_cloud_snapshot()
     st.title("🚜 Farmer workspace")
     st.write("Manage your listings and see what customers are buying.")
     farmer_id = st.session_state.get("user_email", "farmer@agridirect.local")
@@ -644,6 +799,7 @@ def farmer_view():
             st.image(profile_photo, caption="FRS profile photo", width=180)
         else:
             st.info("No FRS profile photo has been saved for this session.")
+    listing_assistant()
     st.subheader("Add a product")
     product_upload = st.file_uploader(
         "Upload product image",
@@ -652,16 +808,19 @@ def farmer_view():
         key="product-image-upload",
     )
     with st.form("new-product"):
-        name = st.text_input("Product name")
-        description = st.text_area("Description")
+        name = st.text_input("Product name", key="product-name-field")
+        description = st.text_area("Description", key="product-description-field")
         image_url = st.text_input("Product image URL", placeholder="https://...")
-        category = st.selectbox("Category", ["Vegetables", "Fruits", "Grains", "Pantry", "Dairy"])
+        category = st.selectbox(
+            "Category", ["Vegetables", "Fruits", "Grains", "Pantry", "Dairy"],
+            key="product-category-field",
+        )
         price, stock = st.columns(2)
         with price:
-            product_price = st.number_input("Price (₹)", min_value=1.0, value=50.0)
+            product_price = st.number_input("Price (₹)", min_value=1.0, value=50.0, key="product-price-field")
         with stock:
-            product_stock = st.number_input("Quantity in stock", min_value=1, value=10)
-        unit = st.text_input("Unit", value="kg")
+            product_stock = st.number_input("Quantity in stock", min_value=1, value=10, key="product-stock-field")
+        unit = st.text_input("Unit", value="kg", key="product-unit-field")
         if st.form_submit_button("Publish listing", type="primary"):
             if not name.strip():
                 st.error("A product name is required.")
@@ -841,11 +1000,12 @@ def main():
     else:
         admin_view()
     st.sidebar.divider()
-    st.sidebar.caption("Demo data is stored in this browser session only.")
+    st.sidebar.caption("Accounts and marketplace data persist in SQLite; shared S3 sync is optional.")
     if st.sidebar.button("Sign out", use_container_width=True):
         st.session_state.authenticated_user = None
         st.rerun()
     if role == "Admin" and st.sidebar.button("Reset demo data"):
+        clear_persisted_marketplace()
         for key in ["products", "cart", "orders", "next_product_id", "next_order_id"]:
             st.session_state.pop(key, None)
         st.rerun()

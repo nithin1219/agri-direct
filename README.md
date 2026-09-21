@@ -49,7 +49,7 @@ password = "use-a-long-unique-password"
 
 The equivalent environment variables are `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD`. On the next app start, this account is created or updated as an `Admin` account, its password is stored as a PBKDF2 hash in SQLite, and it can sign in from the local LAN link or the public deployment. The demo admin remains only as a local fallback when production admin secrets are not configured.
 
-The app seeds sample products and stores cart, orders, listings, and status updates in the current browser session. Registrations are saved once in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`); the app checks that database before creating another account, so an existing email or username cannot be registered again after restart or from another browser.
+The app stores registrations and marketplace snapshots (products, orders, and uploaded image bytes) in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`). This means a new account or listing is available to later Streamlit sessions on the same deployment. Configure `AGRI_S3_BUCKET` plus AWS credentials for best-effort shared snapshots across multiple app replicas/devices; without shared storage, all replicas must use the same SQLite file. Cart contents remain browser-session scoped.
 
 ## Deploy on Streamlit Community Cloud
 
@@ -81,14 +81,15 @@ Use the deployed Community Cloud address for access from any device at any time:
 - FRS activation controls for farmers and the administrator, with daily camera access
 - Admin account review, product moderation/removal, and order-status controls
 - Product browsing, search, category and organic filters
-- Newly published farmer listings become visible to customers after marketplace refresh when shared bucket storage is configured
+- Newly published farmer listings become visible to customers after marketplace refresh; SQLite persistence works locally and optional S3 snapshots synchronize separate replicas
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
 - Cart quantity management and Cash on Delivery checkout
 - Welcome message at sign-in and thank-you confirmation after completed purchases
 - Customer order history and fulfillment status
 - Farmer product creation and inventory view
 - Admin inventory, order, and session-revenue dashboard
-- Seeded sample data with local `st.session_state` persistence
+- Seeded sample data with persistent SQLite storage and an administrator reset action
+- Multilingual crop/listing assistant (English, Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, and Marathi) with microphone transcription when optional support is installed and a text fallback
 - Farm-and-plants visual theme on the public home screen
 
 ### Demo sign-in accounts
@@ -108,7 +109,11 @@ New customer and farmer accounts can be registered from the sign-in screen. Sign
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
 
-Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. If a deployment provides the optional `face-recognition` package, the enrolled farmer receives a daily camera verification gate; otherwise the app safely falls back to username/password login without failing.
+Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. If the optional `face-recognition` package is installed, enrollment must contain a detectable face and every daily camera verification must match the enrolled face; a different face or missing enrollment is rejected. Without that package, the app safely falls back to secure username/password login plus a daily camera capture (capture is not biometric matching).
+
+### Optional voice and face features
+
+The base install intentionally has no fragile native dependencies. `st.audio_input` is used when provided by the installed Streamlit version. To transcribe recorded WAV audio, optionally install `SpeechRecognition` and provide the audio service it uses; otherwise use the transcript/text box. The listing assistant is a reviewable, lightweight field-prefill foundation, not a guarantee of translation or medical/agronomic advice. Install `face-recognition` only when its native build dependencies are available; its absence enables the documented secure fallback.
 
 When `AGRI_S3_BUCKET` and AWS credentials are configured, the app restores users, hashed passwords, product listings, uploaded image bytes, orders, and verification dates from `agridirect/state.json`, then snapshots changes back to the same bucket. Do not store production credentials in source control; configure them as Streamlit secrets or deployment environment variables.
 
