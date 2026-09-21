@@ -433,6 +433,33 @@ def seed_state():
 def registration_view():
     st.subheader("Create your AgriDirect account")
     st.caption("Complete the form once. Your account is saved for future sign-ins.")
+    st.markdown("#### 🎙️ AI account assistant")
+    st.caption("Speak or type your email, username, and account type. The assistant fills those fields; enter your password manually.")
+    registration_language = st.selectbox("Assistant language", list(ASSISTANT_LANGUAGES), key="registration-assistant-language")
+    registration_audio_input = getattr(st, "audio_input", None)
+    if callable(registration_audio_input):
+        registration_audio = registration_audio_input("Record account details (optional)", key="registration-assistant-audio")
+        if registration_audio and st.button("Transcribe account details", key="transcribe-registration-audio"):
+            if speech_recognition is None:
+                st.warning("Voice transcription is unavailable; use the text fallback.")
+            else:
+                try:
+                    recognizer = speech_recognition.Recognizer()
+                    with speech_recognition.AudioFile(io.BytesIO(registration_audio.getvalue())) as source:
+                        transcript = recognizer.record(source)
+                    st.session_state["registration-assistant-text"] = recognizer.recognize_google(
+                        transcript, language=ASSISTANT_LANGUAGES[registration_language]
+                    )
+                except (OSError, ValueError, speech_recognition.UnknownValueError, speech_recognition.RequestError):
+                    st.warning("The recording could not be transcribed. Please use the text fallback.")
+    registration_request = st.text_area(
+        "Voice transcript or text details",
+        key="registration-assistant-text",
+        placeholder="Example: customer, email me@example.com, username freshbuyer",
+    )
+    if st.button("Fill account details", key="apply-registration-assistance"):
+        if apply_account_assistance(registration_request, "registration-page"):
+            st.success("Email, username, and account type filled. Enter your password manually.")
     account_role = st.selectbox("Account type", ["Customer", "Farmer"], key="registration-page-role")
     farmer_photo = st.file_uploader(
         "Farmer FRS profile photo (required for farmer accounts)",
@@ -539,6 +566,9 @@ def authentication_view():
                 key="login-assistant-text",
                 placeholder="Example: How do I sign in or create a farmer account?",
             )
+            if st.button("Fill sign-in details", key="apply-login-assistance"):
+                if apply_account_assistance(request, "login"):
+                    st.success("Email or username filled. Enter your password manually.")
             if st.button("Show sign-in instructions", key="login-assistant-submit"):
                 st.info(
                     "Enter your registered email or username and password in the Sign in tab. "
@@ -582,7 +612,7 @@ def authentication_view():
     login_tab, register_tab = st.tabs(["Sign in", "Create account"])
     with login_tab:
         with st.form("login-form"):
-            email = st.text_input("Email or username", placeholder="you@example.com or greenvalley")
+            email = st.text_input("Email or username", key="login-email", placeholder="you@example.com or greenvalley")
             password = st.text_input("Password", type="password")
             submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         if submitted:
@@ -705,6 +735,24 @@ def apply_listing_assistance(text):
     if unit:
         st.session_state["product-unit-field"] = unit.group(1).lower().rstrip("s")
     return True
+
+
+def apply_account_assistance(text, field_prefix):
+    text = text.strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    email = re.search(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", lowered)
+    username = re.search(r"(?:username|user name|login)\s*(?:is|:)?\s*([a-z0-9_.-]{3,32})", lowered)
+    role = "Farmer" if re.search(r"\bfarmer\b|\bformar\b|\bరైతు\b", lowered) else "Customer"
+    if email:
+        st.session_state[f"{field_prefix}-email"] = email.group(0)
+    if username:
+        st.session_state[f"{field_prefix}-username"] = username.group(1)
+        if field_prefix == "login" and not email:
+            st.session_state["login-email"] = username.group(1)
+    st.session_state[f"{field_prefix}-role"] = role
+    return bool(email or username)
 
 
 def listing_assistant():

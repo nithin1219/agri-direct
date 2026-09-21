@@ -92,6 +92,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Multilingual crop/listing assistant (English, Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, and Marathi) with microphone transcription when optional support is installed and a text fallback
 - Top-level AI Voice Mode button with step-by-step microphone, language, transcription, and review instructions
 - AI voice assistance button on the login page for multilingual sign-in and registration guidance
+- AI account assistant can fill spoken/transcribed email, username, and account type on login/registration; passwords always remain manual
 - Farm-and-plants visual theme on the public home screen
 
 ### Demo sign-in accounts
