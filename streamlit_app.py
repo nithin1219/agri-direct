@@ -430,6 +430,66 @@ def seed_state():
         save_cloud_snapshot()
 
 
+def registration_view():
+    st.subheader("Create your AgriDirect account")
+    st.caption("Complete the form once. Your account is saved for future sign-ins.")
+    account_role = st.selectbox("Account type", ["Customer", "Farmer"], key="registration-page-role")
+    farmer_photo = st.file_uploader(
+        "Farmer FRS profile photo (required for farmer accounts)",
+        type=IMAGE_TYPES,
+        help="Upload a clear face photo for the farmer registration profile.",
+        disabled=account_role != "Farmer",
+        key="registration-page-photo",
+    )
+    with st.form("registration-page-form"):
+        new_email = st.text_input("Email address", key="registration-page-email")
+        new_username = st.text_input("Username", key="registration-page-username")
+        new_password = st.text_input("Password", type="password", key="registration-page-password")
+        confirm_password = st.text_input("Confirm password", type="password", key="registration-page-confirm")
+        create_account = st.form_submit_button("Create account", type="primary", use_container_width=True)
+    if create_account:
+        normalized_email = new_email.strip().lower()
+        username = new_username.strip().lower()
+        if "@" not in normalized_email or not new_password or not username:
+            st.error("Enter a valid email, username, and password.")
+        elif len(new_password) < 8:
+            st.error("Password must be at least 8 characters.")
+        elif new_password != confirm_password:
+            st.error("Passwords do not match.")
+        elif normalized_email in st.session_state.users or database_account_exists(normalized_email, username):
+            st.error("An account with that email already exists.")
+        elif any(user["username"] == username for user in st.session_state.users.values()):
+            st.error("That username is already taken.")
+        elif account_role == "Farmer" and not farmer_photo:
+            st.error("Farmer registration requires an FRS profile photo.")
+        else:
+            enrolled_encoding = face_encoding(farmer_photo.getvalue()) if farmer_photo and account_role == "Farmer" else None
+            if account_role == "Farmer" and face_recognition is not None and not enrolled_encoding:
+                st.error("No clear face was found in that photo. Upload one clear, front-facing farmer photo.")
+                return
+            account = {
+                "email": normalized_email, "role": account_role, "username": username,
+                "password": password_hash(new_password),
+                "frs_photo": farmer_photo.getvalue() if farmer_photo else None,
+                "frs_photo_name": farmer_photo.name if farmer_photo else None,
+                "face_encoding": enrolled_encoding,
+                "frs_enabled": account_role == "Farmer",
+            }
+            if not save_database_user(account):
+                st.error("Your account could not be saved. Check the database location and try again.")
+            else:
+                st.session_state.users[account["email"]] = account
+                save_cloud_snapshot()
+                st.session_state.authenticated_user = account["email"]
+                st.session_state.role = account["role"]
+                st.session_state.pop("show_create_account", None)
+                st.success("Account created successfully. Welcome to AgriDirect!")
+                st.rerun()
+    if st.button("Back to sign in", key="back-to-signin"):
+        st.session_state.pop("show_create_account", None)
+        st.rerun()
+
+
 def authentication_view():
     st.title("🌱 Welcome to AgriDirect")
     st.success("Welcome! Sign in to continue to your AgriDirect marketplace.")
@@ -515,6 +575,9 @@ def authentication_view():
                 st.rerun()
             else:
                 st.error("Face mismatch. This farmer account cannot be opened by another person.")
+        return
+    if st.session_state.get("show_create_account"):
+        registration_view()
         return
     login_tab, register_tab = st.tabs(["Sign in", "Create account"])
     with login_tab:
