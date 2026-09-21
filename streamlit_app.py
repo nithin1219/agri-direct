@@ -10,10 +10,12 @@ import base64
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import secrets
 import sqlite3
+from urllib.parse import quote_plus
 
 import pandas as pd
 import streamlit as st
@@ -349,6 +351,8 @@ def sync_cloud_snapshot():
         st.session_state.products = snapshot["products"]
         for product in st.session_state.products:
             product["image_bytes"] = _decode_bytes(product.get("image_bytes"))
+            product.setdefault("farmer_location", "Location not provided")
+            product.setdefault("crop_details", product.get("description", ""))
     if snapshot.get("users") is not None:
         current_email = st.session_state.get("authenticated_user")
         st.session_state.users = snapshot["users"]
@@ -373,18 +377,20 @@ def seed_state():
     snapshot = load_cloud_snapshot() or load_local_snapshot()
     if "products" not in st.session_state:
         seeded_products = [
-            {"id": 1, "name": "Farm Fresh Tomatoes", "category": "Vegetables", "price": 48.0, "unit": "kg", "stock": 32, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Juicy, vine-ripened tomatoes harvested this morning.", "emoji": "🍅", "image_url": "https://images.unsplash.com/photo-1546094096-0df4bcaaa337?w=900"},
-            {"id": 2, "name": "Alphonso Mangoes", "category": "Fruits", "price": 180.0, "unit": "kg", "stock": 18, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "organic": True, "description": "Naturally sweet seasonal mangoes from our orchard.", "emoji": "🥭", "image_url": "https://images.unsplash.com/photo-1553279768-865429fa0078?w=900"},
-            {"id": 3, "name": "Organic Basmati Rice", "category": "Grains", "price": 125.0, "unit": "kg", "stock": 50, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Aromatic long-grain rice, grown without synthetic pesticides.", "emoji": "🌾", "image_url": "https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?w=900"},
-            {"id": 4, "name": "Cold-Pressed Groundnut Oil", "category": "Pantry", "price": 220.0, "unit": "litre", "stock": 12, "farmer": "Harvest Collective", "farmer_id": "farmer@agridirect.local", "organic": False, "description": "Small-batch wood-pressed oil with a rich, nutty flavour.", "emoji": "🫙", "image_url": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=900"},
-            {"id": 5, "name": "Fresh Spinach", "category": "Vegetables", "price": 35.0, "unit": "bunch", "stock": 40, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "organic": True, "description": "Tender leafy greens picked at sunrise.", "emoji": "🥬", "image_url": "https://images.unsplash.com/photo-1576045057995-568f588f82fb?w=900"},
-            {"id": 6, "name": "Raw Forest Honey", "category": "Pantry", "price": 310.0, "unit": "500 g", "stock": 15, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "organic": True, "description": "Unfiltered wildflower honey collected from local hives.", "emoji": "🍯", "image_url": "https://images.unsplash.com/photo-1587049352846-4a222e784d38?w=900"},
+            {"id": 1, "name": "Farm Fresh Tomatoes", "category": "Vegetables", "price": 48.0, "unit": "kg", "stock": 32, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "farmer_location": "Shamirpet, Hyderabad", "farmer_lat": 17.595, "farmer_lon": 78.561, "crop_details": "Vine-ripened; harvested this morning.", "organic": True, "description": "Juicy, vine-ripened tomatoes harvested this morning.", "emoji": "🍅", "image_url": "https://images.unsplash.com/photo-1546094096-0df4bcaaa337?w=900"},
+            {"id": 2, "name": "Alphonso Mangoes", "category": "Fruits", "price": 180.0, "unit": "kg", "stock": 18, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "farmer_location": "Vikarabad, Telangana", "farmer_lat": 17.338, "farmer_lon": 77.904, "crop_details": "Naturally ripened seasonal mangoes.", "organic": True, "description": "Naturally sweet seasonal mangoes from our orchard.", "emoji": "🥭", "image_url": "https://images.unsplash.com/photo-1553279768-865429fa0078?w=900"},
+            {"id": 3, "name": "Organic Basmati Rice", "category": "Grains", "price": 125.0, "unit": "kg", "stock": 50, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "farmer_location": "Shamirpet, Hyderabad", "farmer_lat": 17.595, "farmer_lon": 78.561, "crop_details": "Aromatic long-grain rice; no synthetic pesticides.", "organic": True, "description": "Aromatic long-grain rice, grown without synthetic pesticides.", "emoji": "🌾", "image_url": "https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?w=900"},
+            {"id": 4, "name": "Cold-Pressed Groundnut Oil", "category": "Pantry", "price": 220.0, "unit": "litre", "stock": 12, "farmer": "Harvest Collective", "farmer_id": "farmer@agridirect.local", "farmer_location": "Medchal, Telangana", "farmer_lat": 17.629, "farmer_lon": 78.481, "crop_details": "Small-batch wood-pressed groundnuts.", "organic": False, "description": "Small-batch wood-pressed oil with a rich, nutty flavour.", "emoji": "🫙", "image_url": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=900"},
+            {"id": 5, "name": "Fresh Spinach", "category": "Vegetables", "price": 35.0, "unit": "bunch", "stock": 40, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "farmer_location": "Shamirpet, Hyderabad", "farmer_lat": 17.595, "farmer_lon": 78.561, "crop_details": "Tender leafy greens picked at sunrise.", "organic": True, "description": "Tender leafy greens picked at sunrise.", "emoji": "🥬", "image_url": "https://images.unsplash.com/photo-1576045057995-568f588f82fb?w=900"},
+            {"id": 6, "name": "Raw Forest Honey", "category": "Pantry", "price": 310.0, "unit": "500 g", "stock": 15, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "farmer_location": "Vikarabad, Telangana", "farmer_lat": 17.338, "farmer_lon": 77.904, "crop_details": "Unfiltered wildflower honey from local hives.", "organic": True, "description": "Unfiltered wildflower honey collected from local hives.", "emoji": "🍯", "image_url": "https://images.unsplash.com/photo-1587049352846-4a222e784d38?w=900"},
         ]
         st.session_state.products = (
             snapshot["products"] if snapshot and "products" in snapshot else seeded_products
         )
         for product in st.session_state.products:
             product["image_bytes"] = _decode_bytes(product.get("image_bytes"))
+            product.setdefault("farmer_location", "Location not provided")
+            product.setdefault("crop_details", product.get("description", ""))
     st.session_state.setdefault("cart", {})
     st.session_state.setdefault("orders", (snapshot or {}).get("orders", []))
     st.session_state.setdefault(
@@ -878,6 +884,42 @@ def add_to_cart(product_id, quantity=1):
     st.session_state.cart[product_id] = min(existing + quantity, product["stock"])
 
 
+def product_location(product):
+    return product.get("farmer_location") or "Location not provided"
+
+
+def route_link(product, destination):
+    origin = product_location(product)
+    if product.get("farmer_lat") is not None and product.get("farmer_lon") is not None:
+        origin = f"{product['farmer_lat']},{product['farmer_lon']}"
+    return (
+        "https://www.google.com/maps/dir/?api=1&origin="
+        f"{quote_plus(str(origin))}&destination={quote_plus(destination)}"
+    )
+
+
+def haversine_km(lat1, lon1, lat2, lon2):
+    radius = 6371.0
+    lat1, lon1, lat2, lon2 = [math.radians(float(value)) for value in (lat1, lon1, lat2, lon2)]
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    value = math.sin(dlat / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2) ** 2
+    return radius * 2 * math.asin(math.sqrt(value))
+
+
+def estimated_eta(distance_km):
+    return max(20, round(25 + float(distance_km) * 4))
+
+
+def order_date(order):
+    try:
+        return datetime.fromisoformat(order.get("created_iso", "")).date().isoformat()
+    except (TypeError, ValueError):
+        try:
+            return datetime.strptime(order.get("created", ""), "%d %b %Y, %I:%M %p").date().isoformat()
+        except (TypeError, ValueError):
+            return ""
+
+
 def cart_rows():
     rows = []
     for product_id, quantity in st.session_state.cart.items():
@@ -895,6 +937,8 @@ def show_product_card(product):
             st.image(product["image_url"], use_container_width=True)
         st.markdown(f"### {product['emoji']} {product['name']}")
         st.caption(f"{product['farmer']} · {product['category']}")
+        st.write(f"**Farmer location:** {product_location(product)}")
+        st.caption(f"**Crop details:** {product.get('crop_details') or 'Details not provided'}")
         st.write(product["description"])
         st.markdown(f"**{money(product['price'])} / {product['unit']}**")
         st.caption(f"{'Organic' if product['organic'] else 'Conventional'} · {product['stock']} {product['unit']} available")
@@ -982,33 +1026,82 @@ def render_cart():
     st.metric("Subtotal", money(subtotal))
     st.caption(f"Delivery fee: {money(DELIVERY_FEE)} · Total: {money(subtotal + DELIVERY_FEE)}")
     with st.expander("Checkout with Cash on Delivery", expanded=True):
+        context_options = {
+            f"{product['name']} · {product['farmer']} ({product_location(product)})": product
+            for product, _ in rows
+        }
+        selected_context_label = st.selectbox(
+            "Purchase context (farmer/listing)",
+            list(context_options),
+            help="Choose the farmer/listing used for delivery ETA and route details.",
+            key="checkout-context",
+        )
         with st.form("checkout"):
             address = st.text_area("Delivery address", placeholder="House number, street, locality")
             city = st.text_input("City", value="Hyderabad")
             pincode = st.text_input("PIN code", max_chars=6)
+            customer_lat = st.text_input("Your latitude (optional)", placeholder="17.385")
+            customer_lon = st.text_input("Your longitude (optional)", placeholder="78.486")
+            manual_distance = st.number_input(
+                "Distance from selected farm (km, optional fallback)",
+                min_value=0.0,
+                value=0.0,
+                step=0.5,
+                help="Used only when both farmer and customer coordinates are not available.",
+            )
             submitted = st.form_submit_button("Place COD order", type="primary", use_container_width=True)
         if submitted:
             if not address.strip() or len(pincode.strip()) != 6 or not pincode.isdigit():
                 st.error("Enter a delivery address and a valid 6-digit PIN code.")
             else:
-                place_order(address.strip(), city.strip(), pincode.strip(), subtotal + DELIVERY_FEE)
+                selected_product = context_options[selected_context_label]
+                distance = manual_distance
+                if customer_lat.strip() and customer_lon.strip() and selected_product.get("farmer_lat") is not None:
+                    try:
+                        distance = haversine_km(
+                            selected_product["farmer_lat"], selected_product["farmer_lon"],
+                            float(customer_lat), float(customer_lon),
+                        )
+                    except ValueError:
+                        st.warning("Coordinates were not valid, so the manual distance fallback was used.")
+                eta = estimated_eta(distance)
+                destination = f"{address.strip()}, {city.strip()} - {pincode.strip()}"
+                st.info(f"Estimated delivery: **{eta} minutes** (20–30 minute baseline + distance adjustment).")
+                st.markdown(
+                    f"[Open live route in Google Maps]({route_link(selected_product, destination)}) · "
+                    f"[Open route in OpenStreetMap](https://www.openstreetmap.org/directions?engine=fossgis_osrm_car&route="
+                    f"{quote_plus(product_location(selected_product))}%3B{quote_plus(destination)})"
+                )
+                place_order(
+                    address.strip(), city.strip(), pincode.strip(), subtotal + DELIVERY_FEE,
+                    selected_product, distance, eta, destination,
+                )
 
 
 def update_quantity(product_id):
     st.session_state.cart[product_id] = st.session_state[f"qty-{product_id}"]
 
 
-def place_order(address, city, pincode, total):
+def place_order(address, city, pincode, total, context_product, distance_km, eta_minutes, destination):
     purchased_rows = cart_rows()
     order = {
         "id": st.session_state.next_order_id,
         "created": datetime.now().strftime("%d %b %Y, %I:%M %p"),
+        "created_iso": datetime.now().isoformat(),
         "items": [{"name": p["name"], "quantity": q, "total": p["price"] * q} for p, q in purchased_rows],
         "total": total,
         "address": f"{address}, {city} - {pincode}",
         "status": "Placed",
         "payment": "Cash on Delivery",
         "owner_email": st.session_state.authenticated_user,
+        "farmer": context_product.get("farmer"),
+        "farmer_id": context_product.get("farmer_id"),
+        "farmer_location": product_location(context_product),
+        "listing": context_product.get("name"),
+        "crop_details": context_product.get("crop_details", ""),
+        "distance_km": round(float(distance_km), 1),
+        "eta_minutes": int(eta_minutes),
+        "route_url": route_link(context_product, destination),
     }
     st.session_state.orders.insert(0, order)
     st.session_state.next_order_id += 1
@@ -1032,7 +1125,17 @@ def render_orders():
             columns[0].markdown(f"**Order #{order['id']}**\n\n{order['created']}")
             columns[1].write(" · ".join(f"{item['name']} × {item['quantity']}" for item in order["items"]))
             columns[2].metric(order["status"], money(order["total"]))
-            st.caption(f"{order['payment']} · Deliver to {order['address']}")
+            st.caption(
+                f"{order['payment']} · Deliver to {order['address']} · "
+                f"Farmer: {order.get('farmer', 'Not recorded')} ({order.get('farmer_location', 'Location not provided')})"
+            )
+            st.caption(
+                f"Listing: {order.get('listing', 'Not recorded')} · "
+                f"Distance: {order.get('distance_km', '—')} km · "
+                f"ETA estimate: {order.get('eta_minutes', '—')} minutes"
+            )
+            if order.get("route_url"):
+                st.markdown(f"[View live delivery route]({order['route_url']})")
 
 
 def farmer_view():
@@ -1064,7 +1167,23 @@ def farmer_view():
     )
     with st.form("new-product"):
         name = st.text_input("Product name", key="product-name-field")
+        farm_name = st.text_input("Farm / farmer display name", value="My farm", key="farm-name-field")
+        farmer_location = st.text_input(
+            "Farm location (town / area)",
+            placeholder="Example: Shamirpet, Hyderabad",
+            key="farmer-location-field",
+        )
+        location_columns = st.columns(2)
+        with location_columns[0]:
+            farmer_lat = st.text_input("Farm latitude (optional)", key="farmer-lat-field")
+        with location_columns[1]:
+            farmer_lon = st.text_input("Farm longitude (optional)", key="farmer-lon-field")
         description = st.text_area("Description", key="product-description-field")
+        crop_details = st.text_area(
+            "Crop details",
+            placeholder="Variety, harvest timing, growing method, or seasonal notes",
+            key="crop-details-field",
+        )
         image_url = st.text_input("Product image URL", placeholder="https://...")
         category = st.selectbox(
             "Category", ["Vegetables", "Fruits", "Grains", "Pantry", "Dairy"],
@@ -1076,14 +1195,30 @@ def farmer_view():
         with stock:
             product_stock = st.number_input("Quantity in stock", min_value=1, value=10, key="product-stock-field")
         unit = st.text_input("Unit", value="kg", key="product-unit-field")
+        organic = st.checkbox("Organic / naturally grown", value=True, key="product-organic-field")
         if st.form_submit_button("Publish listing", type="primary"):
             if not name.strip():
                 st.error("A product name is required.")
+            elif not farmer_location.strip():
+                st.error("Add the farm location so customers can compare nearby listings.")
             else:
+                try:
+                    parsed_lat = float(farmer_lat) if farmer_lat.strip() else None
+                    parsed_lon = float(farmer_lon) if farmer_lon.strip() else None
+                    if parsed_lat is not None and not -90 <= parsed_lat <= 90:
+                        raise ValueError
+                    if parsed_lon is not None and not -180 <= parsed_lon <= 180:
+                        raise ValueError
+                except ValueError:
+                    st.error("Farm latitude must be -90 to 90 and longitude must be -180 to 180.")
+                    return
                 st.session_state.products.append({
                     "id": st.session_state.next_product_id, "name": name.strip(), "category": category,
                     "price": product_price, "unit": unit.strip() or "kg", "stock": int(product_stock),
-                    "farmer": "My farm", "farmer_id": farmer_id, "organic": True,
+                    "farmer": farm_name.strip() or "My farm", "farmer_id": farmer_id,
+                    "farmer_location": farmer_location.strip(), "farmer_lat": parsed_lat, "farmer_lon": parsed_lon,
+                    "crop_details": crop_details.strip() or "Freshly harvested crop.",
+                    "organic": organic,
                     "description": description.strip() or "Freshly harvested from our farm.", "emoji": "🌿",
                     "image_url": image_url.strip(),
                     "image_bytes": product_upload.getvalue() if product_upload else None,
@@ -1111,11 +1246,49 @@ def admin_view():
     customers = sum(1 for user in st.session_state.users.values() if user["role"] == "Customer")
     farmers = len({p["farmer_id"] for p in st.session_state.products})
     revenue = sum(order["total"] for order in st.session_state.orders)
+    today = date.today().isoformat()
+    daily_orders = [
+        order for order in st.session_state.orders
+        if order_date(order) == today
+    ]
+    daily_income = sum(order["total"] for order in daily_orders)
     columns = st.columns(4)
     columns[0].metric("Products", len(st.session_state.products))
     columns[1].metric("Farmers", farmers)
     columns[2].metric("Orders", len(st.session_state.orders))
     columns[3].metric("Session revenue", money(revenue))
+    report_tabs = st.tabs(["Daily income", "Transaction summary", "Full order history"])
+    with report_tabs[0]:
+        st.metric("Today's income", money(daily_income), help="Completed or placed COD order value recorded today.")
+        st.dataframe(
+            pd.DataFrame([
+                {"Order": order["id"], "Time": order["created"], "Income": money(order["total"]),
+                 "Farmer": order.get("farmer", "—"), "Status": order["status"]}
+                for order in daily_orders
+            ]),
+            use_container_width=True, hide_index=True,
+        )
+    with report_tabs[1]:
+        status_counts = pd.Series([order["status"] for order in st.session_state.orders]).value_counts() if st.session_state.orders else pd.Series(dtype=int)
+        summary = pd.DataFrame([
+            {"Metric": "All transactions", "Value": len(st.session_state.orders)},
+            {"Metric": "Gross order value", "Value": money(revenue)},
+            {"Metric": "Average order value", "Value": money(revenue / len(st.session_state.orders)) if st.session_state.orders else money(0)},
+            *({"Metric": f"Orders — {status}", "Value": int(count)} for status, count in status_counts.items()),
+        ])
+        st.dataframe(summary, use_container_width=True, hide_index=True)
+    with report_tabs[2]:
+        history = [
+            {
+                "Order": order["id"], "Date": order["created"], "Customer": order.get("owner_email", "—"),
+                "Listing": order.get("listing", "—"), "Farmer": order.get("farmer", "—"),
+                "Farmer location": order.get("farmer_location", "—"), "Distance (km)": order.get("distance_km", "—"),
+                "ETA (min)": order.get("eta_minutes", "—"), "Total": money(order["total"]),
+                "Status": order["status"], "Delivery": order["address"],
+            }
+            for order in st.session_state.orders
+        ]
+        st.dataframe(pd.DataFrame(history), use_container_width=True, hide_index=True)
     st.subheader("Registered accounts")
     account_rows = [
         {
@@ -1190,7 +1363,10 @@ def admin_view():
         st.info("No farmer accounts have been registered yet.")
     st.subheader("Marketplace inventory")
     inventory = pd.DataFrame(st.session_state.products)
-    st.dataframe(inventory[["name", "category", "farmer", "price", "stock", "organic"]], use_container_width=True, hide_index=True)
+    for column, default in {"farmer_location": "Location not provided", "crop_details": ""}.items():
+        if column not in inventory:
+            inventory[column] = default
+    st.dataframe(inventory[["name", "category", "farmer", "farmer_location", "crop_details", "price", "stock", "organic"]], use_container_width=True, hide_index=True)
     if st.session_state.products:
         selected_product = st.selectbox(
             "Product to moderate",
@@ -1210,7 +1386,15 @@ def admin_view():
             st.rerun()
     if st.session_state.orders:
         st.subheader("Recent orders")
-        order_data = [{"Order": o["id"], "Date": o["created"], "Total": money(o["total"]), "Status": o["status"], "Payment": o["payment"]} for o in st.session_state.orders]
+        order_data = [
+            {
+                "Order": o["id"], "Date": o["created"], "Total": money(o["total"]),
+                "Status": o["status"], "Payment": o["payment"], "Farmer": o.get("farmer", "—"),
+                "Location": o.get("farmer_location", "—"), "Distance (km)": o.get("distance_km", "—"),
+                "ETA (min)": o.get("eta_minutes", "—"),
+            }
+            for o in st.session_state.orders
+        ]
         st.dataframe(pd.DataFrame(order_data), use_container_width=True, hide_index=True)
         st.caption("Demo controls: advance an order status to preview fulfillment management.")
         selected = st.selectbox("Order", [o["id"] for o in st.session_state.orders])

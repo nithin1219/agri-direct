@@ -87,7 +87,9 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Welcome message at sign-in and thank-you confirmation after completed purchases
 - Customer order history and fulfillment status
 - Farmer product creation and inventory view
-- Admin inventory, order, and session-revenue dashboard
+- Farmer listings include farm location, optional coordinates, crop details, and nearby-farm visibility for customers
+- Checkout captures the selected farmer/listing, location, distance, ETA estimate, and no-key Google Maps/OpenStreetMap route links
+- Admin inventory, daily income, transaction summary, full order history, and order-status dashboard
 - Seeded sample data with persistent SQLite storage and an administrator reset action
 - Multilingual crop/listing assistant (English, Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, and Marathi) with microphone transcription when optional support is installed and a text fallback
 - Top-level AI Voice Mode button with step-by-step microphone, language, transcription, and review instructions
@@ -109,6 +111,10 @@ The app seeds these accounts for local testing:
 The seeded administrator can review farmer FRS profile-photo status, face-matching availability, and the last daily verification date, then require a farmer to verify again.
 
 New customer and farmer accounts can be registered from the sign-in screen. Signed-in farmers can publish listings with price, stock, description, and image URL; those images appear in the customer product cards. Customer orders are scoped to the signed-in account, while farmer listings are scoped to the signed-in farmer.
+
+Farmers can add a farm/town location, optional latitude/longitude, and crop details to each listing. Customers see those details in the marketplace and select a listing as the purchase context at checkout. If both the farmer and customer provide coordinates, distance is calculated locally with the Haversine formula; otherwise customers can enter an approximate distance or continue without geolocation. ETA is clearly labeled as an estimate using a 20–30 minute baseline plus a small distance adjustment. Route links use Google Maps and OpenStreetMap directly and do not require API keys.
+
+Orders, including farmer/location/distance/ETA metadata, are included in the existing SQLite snapshot and optional S3 snapshot. Administrators can review daily income, transaction status totals, and the complete order history from the dashboard.
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
 
