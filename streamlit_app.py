@@ -484,6 +484,38 @@ def authentication_view():
                     "Enter your registered email or username and password in the Sign in tab. "
                     "Use Create account for a new customer or farmer account. Existing accounts are saved and cannot be registered twice."
                 )
+    pending_face_email = st.session_state.get("pending_face_login")
+    if pending_face_email:
+        pending_user = st.session_state.users.get(pending_face_email)
+        if not pending_user:
+            st.session_state.pop("pending_face_login", None)
+            st.error("The pending face-login request is no longer valid.")
+            return
+        st.subheader("Face verification required")
+        st.info("Password accepted. Capture the enrolled farmer's face to finish signing in.")
+        if face_recognition is None:
+            st.error("Face matching is unavailable on this deployment. A native face-recognition installation is required for farmer login.")
+            if st.button("Cancel face verification", key="cancel-face-login"):
+                st.session_state.pop("pending_face_login", None)
+                st.rerun()
+            return
+        if not pending_user.get("face_encoding"):
+            st.error("This farmer has no enrolled face profile and cannot sign in.")
+            if st.button("Cancel face verification", key="cancel-face-login-missing"):
+                st.session_state.pop("pending_face_login", None)
+                st.rerun()
+            return
+        face_capture = st.camera_input("Capture the enrolled farmer's face", key="login-face-capture")
+        if face_capture:
+            if verify_face(face_capture.getvalue(), pending_user["face_encoding"]):
+                st.session_state.pop("pending_face_login", None)
+                st.session_state.authenticated_user = pending_user["email"]
+                st.session_state.role = pending_user["role"]
+                st.success("Face matched. Sign-in complete.")
+                st.rerun()
+            else:
+                st.error("Face mismatch. This farmer account cannot be opened by another person.")
+        return
     login_tab, register_tab = st.tabs(["Sign in", "Create account"])
     with login_tab:
         with st.form("login-form"):
@@ -496,13 +528,14 @@ def authentication_view():
             if not user:
                 user = next((candidate for candidate in st.session_state.users.values() if candidate["username"] == login_value), None)
             if user and password_matches(password, user["password"]):
-                st.session_state.authenticated_user = user["email"]
-                st.session_state.role = user["role"]
+                if user["role"] == "Farmer":
+                    st.session_state.pending_face_login = user["email"]
+                else:
+                    st.session_state.authenticated_user = user["email"]
+                    st.session_state.role = user["role"]
                 st.rerun()
             else:
                 st.error("Invalid email or password.")
-        with st.expander("Demo accounts"):
-            st.code("customer / customer123\n" "greenvalley / farmer123\n" "sunrise / orchard123\n" "admin / admin123")
     with register_tab:
         account_role = st.selectbox("Account type", ["Customer", "Farmer"], key="register-role")
         farmer_photo = st.file_uploader(

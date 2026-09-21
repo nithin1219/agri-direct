@@ -111,7 +111,7 @@ New customer and farmer accounts can be registered from the sign-in screen. Sign
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
 
-Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. If the optional `face-recognition` package is installed, enrollment must contain a detectable face and every daily camera verification must match the enrolled face; a different face or missing enrollment is rejected. Without that package, the app safely falls back to secure username/password login plus a daily camera capture (capture is not biometric matching).
+Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. Farmer password sign-in is followed by a camera face match; a different face or missing enrollment is rejected before the farmer session opens. The optional `face-recognition` package must be installed for this strict biometric login; if it is unavailable, farmer sign-in is blocked with a clear setup message rather than silently accepting an unverified face.
 
 ### Optional voice and face features
 
