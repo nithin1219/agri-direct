@@ -90,6 +90,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Admin inventory, order, and session-revenue dashboard
 - Seeded sample data with persistent SQLite storage and an administrator reset action
 - Multilingual crop/listing assistant (English, Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, and Marathi) with microphone transcription when optional support is installed and a text fallback
+- Top-level AI Voice Mode button with step-by-step microphone, language, transcription, and review instructions
 - Farm-and-plants visual theme on the public home screen
 
 ### Demo sign-in accounts

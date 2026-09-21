@@ -588,6 +588,45 @@ def listing_assistant():
         st.success("Draft fields filled. Review all values before publishing.")
 
 
+def ai_voice_mode(user_role):
+    st.session_state.setdefault("ai_voice_mode", False)
+    header_left, header_right = st.columns([5, 1])
+    with header_left:
+        st.markdown("### AgriDirect AI assistant")
+        st.caption("Use your voice or type instructions in your selected language.")
+    with header_right:
+        label = "🎙️ AI Voice Mode: ON" if st.session_state.ai_voice_mode else "🎙️ AI Voice Mode"
+        if st.button(label, type="primary" if st.session_state.ai_voice_mode else "secondary", use_container_width=True):
+            st.session_state.ai_voice_mode = not st.session_state.ai_voice_mode
+            st.rerun()
+    if not st.session_state.ai_voice_mode:
+        return
+    with st.container(border=True):
+        st.success("AI Voice Mode is active.")
+        st.markdown(
+            "1. Select a language.  \n"
+            "2. Allow microphone access when your browser asks.  \n"
+            "3. Record your crop or product details, or type them as a fallback.  \n"
+            "4. Transcribe the recording, review the suggested fields, and apply them before saving."
+        )
+        st.caption(
+            "The assistant only prepares a draft. Check price, stock, crop name, and description yourself before publishing. "
+            "Microphone transcription depends on optional browser/package support."
+        )
+        if user_role == "Farmer":
+            listing_assistant()
+        else:
+            language = st.selectbox(
+                "Conversation language",
+                list(ASSISTANT_LANGUAGES),
+                key="general-assistant-language",
+            )
+            st.info(
+                f"Selected language: {language}. Voice input can help you describe marketplace needs; "
+                "customers can still use the text fallback if microphone support is unavailable."
+            )
+
+
 def current_role():
     email = st.session_state.get("authenticated_user")
     return st.session_state.users.get(email, {}).get("role", "Customer")
@@ -799,7 +838,8 @@ def farmer_view():
             st.image(profile_photo, caption="FRS profile photo", width=180)
         else:
             st.info("No FRS profile photo has been saved for this session.")
-    listing_assistant()
+    if not st.session_state.get("ai_voice_mode"):
+        listing_assistant()
     st.subheader("Add a product")
     product_upload = st.file_uploader(
         "Upload product image",
@@ -987,6 +1027,7 @@ def main():
     user = st.session_state.users[st.session_state.authenticated_user]
     role = user["role"]
     st.sidebar.success(f"Signed in as @{user['username']}")
+    ai_voice_mode(role)
     if not daily_farmer_verification():
         return
     if role == "Farmer":
