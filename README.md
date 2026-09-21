@@ -49,7 +49,7 @@ password = "use-a-long-unique-password"
 
 The equivalent environment variables are `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD`. On the next app start, this account is created or updated as an `Admin` account, its password is stored as a PBKDF2 hash in SQLite, and it can sign in from the local LAN link or the public deployment. The demo admin remains only as a local fallback when production admin secrets are not configured.
 
-The app stores registrations and marketplace snapshots (products, orders, and uploaded image bytes) in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`). This means a new account or listing is available to later Streamlit sessions on the same deployment. Configure `AGRI_S3_BUCKET` plus AWS credentials for best-effort shared snapshots across multiple app replicas/devices; without shared storage, all replicas must use the same SQLite file. Cart contents remain browser-session scoped.
+The app stores registrations and marketplace snapshots (products, orders, and uploaded image bytes) in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`). This means a new account or listing is available to later Streamlit sessions on the same deployment, and a saved account is not created again. Configure `AGRI_S3_BUCKET` plus AWS credentials for best-effort shared snapshots across multiple app replicas/devices; without shared storage, all replicas must use the same SQLite file. Cart contents remain browser-session scoped.
 
 ## Deploy on Streamlit Community Cloud
 
@@ -81,7 +81,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - FRS activation controls for farmers and the administrator, with daily camera access
 - Admin account review, product moderation/removal, and order-status controls
 - Product browsing, search, category and organic filters
-- Newly published farmer listings become visible to customers after marketplace refresh; SQLite persistence works locally and optional S3 snapshots synchronize separate replicas
+- Newly published farmer listings become visible to every customer marketplace view automatically every second; SQLite persistence works locally and optional S3 snapshots synchronize separate replicas
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
 - Cart quantity management and Cash on Delivery checkout
 - Welcome message at sign-in and thank-you confirmation after completed purchases

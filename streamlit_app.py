@@ -755,46 +755,62 @@ def show_product_card(product):
                 st.toast(f"Added {product['name']} to your cart")
 
 
+def streamlit_fragment(**kwargs):
+    fragment = getattr(st, "fragment", None) or getattr(st, "experimental_fragment", None)
+    if fragment is None:
+        return lambda function: function
+    return fragment(**kwargs)
+
+
 def customer_view():
     sync_cloud_snapshot()
     st.title("🌱 Shop directly from local farms")
     st.write("Fresh produce, fair prices, and transparent farmer relationships.")
-    if st.button("Refresh marketplace listings", help="Load the newest farmer listings from shared storage."):
-        if sync_cloud_snapshot():
-            st.success("Latest persisted listings are now visible.")
-            st.rerun()
-        st.info("No persisted snapshot is available yet; showing this deployment's local marketplace.")
     cart_count = sum(st.session_state.cart.values())
     tabs = st.tabs(["Browse products", f"Cart ({cart_count})", "My orders"])
 
     with tabs[0]:
-        left, right = st.columns([2, 1])
-        with left:
-            search = st.text_input("Search products", placeholder="Try tomatoes, rice, or honey")
-        with right:
-            categories = ["All categories"] + sorted({p["category"] for p in st.session_state.products})
-            category = st.selectbox("Category", categories)
-        organic_only = st.checkbox("Show organic products only")
-        filtered = [
-            p for p in st.session_state.products
-            if (not search or search.lower() in f"{p['name']} {p['description']} {p['farmer']}".lower())
-            and (category == "All categories" or p["category"] == category)
-            and (not organic_only or p["organic"])
-            and p["stock"] > 0
-        ]
-        if not filtered:
-            st.info("No products match those filters.")
-        else:
-            columns = st.columns(3)
-            for index, product in enumerate(filtered):
-                with columns[index % 3]:
-                    show_product_card(product)
+        marketplace_browser()
 
     with tabs[1]:
         render_cart()
 
     with tabs[2]:
         render_orders()
+
+
+@streamlit_fragment(run_every="1s")
+def marketplace_browser():
+    """Refresh shared listings every second without interrupting cart or checkout."""
+    synced = sync_cloud_snapshot()
+    st.caption("Marketplace listings update automatically every second.")
+    if st.button("Refresh marketplace now", key="refresh-marketplace"):
+        if synced or sync_cloud_snapshot():
+            st.success("Latest farmer listings are now visible.")
+        else:
+            st.info("No shared snapshot is available yet; showing this deployment's local marketplace.")
+        st.rerun(scope="fragment")
+    left, right = st.columns([2, 1])
+    with left:
+        search = st.text_input("Search products", placeholder="Try tomatoes, rice, or honey")
+    with right:
+        categories = ["All categories"] + sorted({p["category"] for p in st.session_state.products})
+        category = st.selectbox("Category", categories)
+    organic_only = st.checkbox("Show organic products only")
+    filtered = [
+        p for p in st.session_state.products
+        if (not search or search.lower() in f"{p['name']} {p['description']} {p['farmer']}".lower())
+        and (category == "All categories" or p["category"] == category)
+        and (not organic_only or p["organic"])
+        and p["stock"] > 0
+    ]
+    if not filtered:
+        st.info("No products match those filters.")
+    else:
+        columns = st.columns(3)
+        for index, product in enumerate(filtered):
+            with columns[index % 3]:
+                show_product_card(product)
 
 
 def render_cart():
