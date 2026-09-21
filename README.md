@@ -49,7 +49,7 @@ password = "use-a-long-unique-password"
 
 The equivalent environment variables are `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD`. On the next app start, this account is created or updated as an `Admin` account, its password is stored as a PBKDF2 hash in SQLite, and it can sign in from the local LAN link or the public deployment. The demo admin remains only as a local fallback when production admin secrets are not configured.
 
-The app seeds sample products and stores cart, orders, listings, and status updates in the current browser session. Verified registrations are saved once in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`); the app checks that database before sending another OTP, so an existing email or username cannot be registered again after restart or from another browser.
+The app seeds sample products and stores cart, orders, listings, and status updates in the current browser session. Registrations are saved once in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`); the app checks that database before creating another account, so an existing email or username cannot be registered again after restart or from another browser.
 
 ## Deploy on Streamlit Community Cloud
 
@@ -73,7 +73,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Customer, farmer, and admin workspace selection
 - Farmer Registration System (FRS) with username login, farmer registration, hashed passwords, and sign-out
 - Registered email addresses, usernames, roles, and hashed passwords are stored in SQLite for later logins
-- Email OTP verification before a new account is created
+- Immediate account creation after valid registration details
 - Farmer FRS profile photo enrollment and farmer-only profile details
 - Daily farmer verification with camera access when optional face matching is available
 - Admin-only farmer FRS verification status and reset controls
@@ -107,21 +107,6 @@ The seeded administrator can review farmer FRS profile-photo status, face-matchi
 New customer and farmer accounts can be registered from the sign-in screen. Signed-in farmers can publish listings with price, stock, description, and image URL; those images appear in the customer product cards. Customer orders are scoped to the signed-in account, while farmer listings are scoped to the signed-in farmer.
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
-
-### Email OTP setup
-
-Configure these Streamlit secrets on **each deployed app** for real delivery to the email address entered during registration:
-
-```toml
-[smtp]
-host = "smtp.gmail.com"
-port = 587
-username = "your-sender@gmail.com"
-password = "your-provider-app-password"
-sender = "your-sender@gmail.com"
-```
-
-The equivalent environment variables are `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`, and `SMTP_SENDER`. For Gmail, use a Google app password rather than the normal account password; never commit it to Git. Port `587` uses STARTTLS and port `465` uses SSL. Codes expire after 10 minutes and are stored only as a hash until verification. Registration is blocked with a clear configuration error until SMTP is configured, so OTPs are never exposed in the UI.
 
 Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. If a deployment provides the optional `face-recognition` package, the enrolled farmer receives a daily camera verification gate; otherwise the app safely falls back to username/password login without failing.
 

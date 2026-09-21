@@ -12,10 +12,6 @@ import io
 import json
 import os
 import secrets
-import smtplib
-from datetime import timedelta
-from email.message import EmailMessage
-from email.utils import parseaddr
 import sqlite3
 
 import pandas as pd
@@ -199,52 +195,6 @@ def configured_admin_account():
         "role": "Admin",
         "password": values["password"],
     }
-
-
-def email_config():
-    defaults = {
-        "host": os.getenv("SMTP_HOST"),
-        "port": int(os.getenv("SMTP_PORT", "587")),
-        "username": os.getenv("SMTP_USERNAME"),
-        "password": os.getenv("SMTP_PASSWORD"),
-        "sender": os.getenv("SMTP_SENDER") or os.getenv("SMTP_USERNAME"),
-    }
-    try:
-        source = st.secrets
-        section = source.get("smtp", {})
-        if not hasattr(section, "get"):
-            section = {}
-        for key in ("host", "port", "username", "password", "sender"):
-            value = section.get(key) or source.get(f"SMTP_{key.upper()}")
-            if value not in (None, ""):
-                defaults[key] = int(value) if key == "port" else value
-    except (FileNotFoundError, KeyError, TypeError, ValueError):
-        pass
-    return defaults
-
-
-def send_email_otp(recipient, otp):
-    config = email_config()
-    if not all([config["host"], config["username"], config["password"], config["sender"]]):
-        return False, "Email delivery is not configured. Add SMTP secrets before registering."
-    address = parseaddr(recipient)[1]
-    if not address or "@" not in address:
-        return False, "Enter a valid recipient email address."
-    message = EmailMessage()
-    message["Subject"] = "AgriDirect email verification code"
-    message["From"] = config["sender"]
-    message["To"] = address
-    message.set_content(f"Your AgriDirect verification code is {otp}. It expires in 10 minutes.")
-    try:
-        client = smtplib.SMTP_SSL if config["port"] == 465 else smtplib.SMTP
-        with client(config["host"], config["port"], timeout=15) as server:
-            if config["port"] != 465:
-                server.starttls()
-            server.login(config["username"], config["password"])
-            server.send_message(message)
-        return True, "Verification code sent to your email."
-    except (OSError, smtplib.SMTPException) as error:
-        return False, f"Unable to send email. Check SMTP settings: {error}"
 
 
 def _encode_bytes(value):
@@ -445,8 +395,8 @@ def authentication_view():
             new_username = st.text_input("Username", key="register-username", help="Farmers use this username to sign in to the FRS portal.")
             new_password = st.text_input("Password", type="password", key="register-password")
             confirm_password = st.text_input("Confirm password", type="password")
-            request_otp = st.form_submit_button("Send email verification code", use_container_width=True)
-        if request_otp:
+            create_account = st.form_submit_button("Create account", type="primary", use_container_width=True)
+        if create_account:
             normalized_email = new_email.strip().lower()
             username = new_username.strip().lower()
             if "@" not in normalized_email or not new_password or not username:
@@ -462,44 +412,24 @@ def authentication_view():
             elif account_role == "Farmer" and not farmer_photo:
                 st.error("Farmer registration requires an FRS profile photo.")
             else:
-                otp = f"{secrets.randbelow(1_000_000):06d}"
-                delivered, message = send_email_otp(normalized_email, otp)
-                if not delivered:
-                    st.error(message)
-                    st.info("Configure SMTP_HOST, SMTP_PORT, SMTP_USERNAME, SMTP_PASSWORD, and SMTP_SENDER in Streamlit secrets, then retry.")
-                    return
-                st.session_state.pending_registration = {
-                    "email": normalized_email, "role": account_role, "username": username,
+                account = {
+                    "email": normalized_email,
+                    "role": account_role,
+                    "username": username,
                     "password": password_hash(new_password),
                     "frs_photo": farmer_photo.getvalue() if farmer_photo else None,
                     "frs_photo_name": farmer_photo.name if farmer_photo else None,
                     "face_encoding": face_encoding(farmer_photo.getvalue()) if farmer_photo and account_role == "Farmer" else None,
                     "frs_enabled": account_role == "Farmer",
-                    "otp_hash": password_hash(otp),
-                    "otp_expires": datetime.now() + timedelta(minutes=10),
                 }
-                st.success(message)
-        pending = st.session_state.get("pending_registration")
-        if pending:
-            with st.form("verify-email-form"):
-                verification_code = st.text_input("Enter the 6-digit email verification code", max_chars=6)
-                verify = st.form_submit_button("Verify email and create account", type="primary")
-            if verify:
-                if datetime.now() > pending["otp_expires"]:
-                    st.error("This code expired. Request a new verification code.")
-                elif not password_matches(verification_code.strip(), pending["otp_hash"]):
-                    st.error("Invalid verification code.")
+                if not save_database_user(account):
+                    st.error("Your account could not be saved. Check the database location and try again.")
                 else:
-                    account = {key: pending[key] for key in ["email", "role", "username", "password", "frs_photo", "frs_photo_name", "face_encoding"]}
                     st.session_state.users[account["email"]] = account
-                    if not save_database_user(account):
-                        st.error("Your account could not be saved. Check the database location and try again.")
-                        return
                     save_cloud_snapshot()
-                    st.session_state.pop("pending_registration", None)
                     st.session_state.authenticated_user = account["email"]
                     st.session_state.role = account["role"]
-                    st.success("Email verified. Your account is ready.")
+                    st.success("Your account is ready. Welcome to AgriDirect!")
                     st.rerun()
 
 
