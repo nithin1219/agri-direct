@@ -434,6 +434,29 @@ def authentication_view():
     st.title("🌱 Welcome to AgriDirect")
     st.success("Welcome! Sign in to continue to your AgriDirect marketplace.")
     st.write("Use your registered email or username and password to shop, manage listings, or review marketplace operations.")
+    oidc_user = getattr(st, "user", None)
+    if oidc_user and getattr(oidc_user, "is_logged_in", False):
+        google_email = str(getattr(oidc_user, "email", "")).strip().lower()
+        if google_email and "@" in google_email:
+            google_name = str(getattr(oidc_user, "name", "")).strip() or google_email.split("@")[0]
+            google_username = "".join(character for character in google_name.lower() if character.isalnum())[:24] or google_email.split("@")[0]
+            existing = st.session_state.users.get(google_email)
+            if not existing:
+                if any(user["username"] == google_username for user in st.session_state.users.values()):
+                    google_username = f"{google_username}-{secrets.token_hex(2)}"
+                existing = {
+                    "email": google_email,
+                    "role": "Customer",
+                    "username": google_username,
+                    "password": password_hash(secrets.token_urlsafe(24)),
+                    "frs_enabled": False,
+                }
+                st.session_state.users[google_email] = existing
+                save_database_user(existing)
+                save_cloud_snapshot()
+            st.session_state.authenticated_user = google_email
+            st.session_state.role = existing["role"]
+            st.rerun()
     st.session_state.setdefault("login_voice_mode", False)
     voice_left, voice_right = st.columns([4, 1])
     with voice_left:
@@ -536,6 +559,20 @@ def authentication_view():
                 st.rerun()
             else:
                 st.error("Invalid email or password.")
+        google_login = getattr(st, "login", None)
+        if callable(google_login):
+            if st.button("Continue with Google", use_container_width=True, key="google-sign-in"):
+                try:
+                    google_login("google")
+                except Exception as error:
+                    st.error(f"Google sign-in is not configured for this deployment: {error}")
+        else:
+            st.info("Google sign-in requires a Streamlit version with OIDC support.")
+        if st.button("Create account", use_container_width=True, key="create-account-below-signin"):
+            st.session_state["show_create_account"] = True
+            st.rerun()
+        if st.session_state.get("show_create_account"):
+            st.info("Open the Create account tab above to register once. Your account is saved for future sign-ins.")
     with register_tab:
         account_role = st.selectbox("Account type", ["Customer", "Farmer"], key="register-role")
         farmer_photo = st.file_uploader(

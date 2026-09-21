@@ -49,6 +49,21 @@ password = "use-a-long-unique-password"
 
 The equivalent environment variables are `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD`. On the next app start, this account is created or updated as an `Admin` account, its password is stored as a PBKDF2 hash in SQLite, and it can sign in from the local LAN link or the public deployment. The demo admin remains only as a local fallback when production admin secrets are not configured.
 
+### Google sign-in setup
+
+Google sign-in is optional and requires Streamlit OIDC configuration in `.streamlit/secrets.toml` or the deployment Secrets panel:
+
+```toml
+[auth]
+redirect_uri = "https://your-app.streamlit.app/oauth2callback"
+cookie_secret = "generate-a-long-random-secret"
+client_id = "your-google-oauth-client-id"
+client_secret = "your-google-oauth-client-secret"
+server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+```
+
+Add the exact redirect URI to the Google OAuth client. Without these secrets, password sign-in and account creation continue to work, while the Google button reports that setup is required. Google users are created once as customer accounts using their verified Google email.
+
 The app stores registrations and marketplace snapshots (products, orders, and uploaded image bytes) in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`). This means a new account or listing is available to later Streamlit sessions on the same deployment, and a saved account is not created again. Configure `AGRI_S3_BUCKET` plus AWS credentials for best-effort shared snapshots across multiple app replicas/devices; without shared storage, all replicas must use the same SQLite file. Cart contents remain browser-session scoped.
 
 ## Deploy on Streamlit Community Cloud
@@ -92,6 +107,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Multilingual crop/listing assistant (English, Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, and Marathi) with microphone transcription when optional support is installed and a text fallback
 - Top-level AI Voice Mode button with step-by-step microphone, language, transcription, and review instructions
 - AI voice assistance button on the login page for multilingual sign-in and registration guidance
+- Optional Google sign-in through Streamlit OIDC, with Google accounts saved as customer accounts after first login
 - Farm-and-plants visual theme on the public home screen
 
 ### Demo sign-in accounts
