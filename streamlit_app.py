@@ -18,6 +18,7 @@ import sqlite3
 from urllib.parse import quote_plus
 
 import pandas as pd
+import plotly.express as px
 import streamlit as st
 
 try:
@@ -1338,6 +1339,66 @@ def admin_view():
             for order in st.session_state.orders
         ]
         st.dataframe(pd.DataFrame(history), use_container_width=True, hide_index=True)
+    st.subheader("Visual reports")
+    delivered_value = sum(
+        order["total"] for order in st.session_state.orders
+        if order.get("status") == "Delivered"
+    )
+    cancelled_value = sum(
+        order["total"] for order in st.session_state.orders
+        if str(order.get("status", "")).lower() in {"cancelled", "refunded"}
+    )
+    pending_value = max(revenue - delivered_value - cancelled_value, 0)
+    gain_loss_data = pd.DataFrame([
+        {"Type": "Delivered gains", "Amount": delivered_value},
+        {"Type": "Pending COD value", "Amount": pending_value},
+        {"Type": "Cancelled/refunded losses", "Amount": cancelled_value},
+    ])
+    chart_columns = st.columns(2)
+    with chart_columns[0]:
+        st.markdown("**Gains, pending value, and recorded losses**")
+        st.bar_chart(gain_loss_data.set_index("Type"), y="Amount", color="#2e7d32")
+        st.caption("Losses include only orders explicitly marked Cancelled or Refunded; no operating costs are recorded.")
+    with chart_columns[1]:
+        status_data = pd.DataFrame([
+            {"Status": status, "Orders": sum(
+                order.get("status") == status for order in st.session_state.orders
+            )}
+            for status in ORDER_STATUSES + ["Cancelled", "Refunded"]
+        ])
+        status_data = status_data[status_data["Orders"] > 0]
+        st.markdown("**Order status distribution**")
+        if status_data.empty:
+            st.info("No orders recorded yet.")
+        else:
+            st.bar_chart(status_data.set_index("Status"), y="Orders", color="#1565c0")
+    farmer_interest = {}
+    for order in st.session_state.orders:
+        farmer = order.get("farmer") or order.get("farmer_id") or "Unknown farmer"
+        farmer_interest.setdefault(farmer, {"orders": 0, "revenue": 0.0})
+        farmer_interest[farmer]["orders"] += 1
+        farmer_interest[farmer]["revenue"] += float(order.get("total", 0))
+    if farmer_interest:
+        interest_data = pd.DataFrame([
+            {"Farmer": farmer, "Orders": values["orders"], "Revenue": values["revenue"]}
+            for farmer, values in farmer_interest.items()
+        ]).sort_values("Orders", ascending=False)
+        interest_columns = st.columns(2)
+        with interest_columns[0]:
+            st.markdown("**Customer interest by farmer**")
+            interest_pie = px.pie(
+                interest_data,
+                names="Farmer",
+                values="Orders",
+                hole=0.35,
+                title="Order share",
+            )
+            st.plotly_chart(interest_pie, use_container_width=True)
+        with interest_columns[1]:
+            st.markdown("**Farmer revenue comparison**")
+            st.bar_chart(interest_data.set_index("Farmer"), y="Revenue", color="#ef6c00")
+    else:
+        st.info("Farmer interest charts will appear after the first customer order.")
     st.subheader("Registered accounts")
     account_rows = [
         {
