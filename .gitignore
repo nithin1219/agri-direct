@@ -9,6 +9,8 @@ backend/__pycache__/
 backend/*.pyc
 backend/**/__pycache__/
 backend/database/*.db
+agridirect_users.db
+__pycache__/
 backend/.env
 
 # OS
