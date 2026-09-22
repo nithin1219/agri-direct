@@ -918,10 +918,17 @@ def daily_farmer_verification():
 
 def add_to_cart(product_id, quantity=1):
     product = next((p for p in st.session_state.products if p["id"] == product_id), None)
-    if not product:
+    if not product or product.get("stock", 0) <= 0:
         return
     existing = st.session_state.cart.get(product_id, 0)
-    st.session_state.cart[product_id] = min(existing + quantity, product["stock"])
+    st.session_state.cart[product_id] = min(
+        max(existing + int(quantity), 1), int(product["stock"])
+    )
+
+
+def refresh_app():
+    """Rerun the complete app so cart badges and tabs reflect mutations immediately."""
+    st.rerun()
 
 
 def product_location(product):
@@ -962,10 +969,18 @@ def order_date(order):
 
 def cart_rows():
     rows = []
+    stale_ids = []
     for product_id, quantity in st.session_state.cart.items():
         product = next((p for p in st.session_state.products if p["id"] == product_id), None)
-        if product and quantity:
-            rows.append((product, quantity))
+        if product and product.get("stock", 0) > 0 and quantity:
+            safe_quantity = min(int(quantity), int(product["stock"]))
+            if safe_quantity != quantity:
+                st.session_state.cart[product_id] = safe_quantity
+            rows.append((product, safe_quantity))
+        elif product_id in st.session_state.cart:
+            stale_ids.append(product_id)
+    for product_id in stale_ids:
+        del st.session_state.cart[product_id]
     return rows
 
 
@@ -986,6 +1001,7 @@ def show_product_card(product):
             if st.button("Add to cart", key=f"add-{product['id']}", use_container_width=True):
                 add_to_cart(product["id"])
                 st.toast(f"Added {product['name']} to your cart")
+                refresh_app()
 
 
 def streamlit_fragment(**kwargs):
@@ -1000,6 +1016,15 @@ def customer_view():
     st.write("Fresh produce, fair prices, and transparent farmer relationships.")
     st.success("All farmer listings are shared across customer accounts and refresh automatically.")
     cart_count = sum(st.session_state.cart.values())
+    cart_preview = cart_rows()
+    if cart_preview:
+        st.info(
+            "Cart items: " + " · ".join(
+                f"{product['name']} × {quantity}" for product, quantity in cart_preview
+            )
+        )
+    else:
+        st.caption("Your cart is empty. Add products from Browse products.")
     tabs = st.tabs(["Browse products", f"Cart ({cart_count})", "My orders"])
 
     with tabs[0]:

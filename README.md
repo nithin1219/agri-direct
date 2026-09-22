@@ -83,7 +83,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Product browsing, search, category and organic filters
 - Newly published farmer listings become visible to every customer marketplace view automatically every second; SQLite persistence works locally and optional S3 snapshots synchronize separate replicas
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
-- Cart quantity management, address checkout, Cash on Delivery confirmation, transaction reference, and order history
+- Working add-to-cart buttons with immediate cart-badge refresh, visible cart item summary, quantity management, address checkout, Cash on Delivery confirmation, transaction reference, and order history
 - Welcome message at sign-in and thank-you confirmation after completed purchases
 - Customer order history and fulfillment status
 - Farmer product creation and inventory view
