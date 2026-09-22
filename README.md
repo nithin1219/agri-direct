@@ -83,7 +83,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Product browsing, search, category and organic filters
 - Newly published farmer listings become visible to every customer marketplace view automatically every second; SQLite persistence works locally and optional S3 snapshots synchronize separate replicas
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
-- Working add-to-cart buttons with immediate cart-badge refresh, visible cart item summary, quantity management, address checkout, Cash on Delivery confirmation, transaction reference, and order history
+- Working add-to-cart buttons with immediate cart-badge refresh, visible cart item summary, quantity management, address checkout, Cash on Delivery confirmation, transaction reference, immediate cancellation for Placed/Confirmed/Preparing orders, and order history
 - Welcome message at sign-in and thank-you confirmation after completed purchases
 - Customer order history and fulfillment status
 - Farmer product creation and inventory view
@@ -117,6 +117,8 @@ Farmers can add a farm/town location, optional latitude/longitude, and crop deta
 Orders, including farmer/location/distance/ETA metadata, are included in the existing SQLite snapshot and optional S3 snapshot. Administrators can review daily income, transaction status totals, and the complete order history from the dashboard.
 
 Checkout uses Cash on Delivery only. Every completed purchase receives an order number and transaction reference, clears the cart, reduces stock, and appears in customer order history and the Admin transaction reports. No simulated online payment is presented or marked as successful.
+
+Customers can cancel an order while it is Placed, Confirmed, or Preparing. Cancellation immediately marks the order as Cancelled, restores the reserved quantities to marketplace stock, records the cancellation time, and shows the confirmation in order history. Orders already Out for delivery or Delivered cannot be cancelled from the customer dashboard.
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
 

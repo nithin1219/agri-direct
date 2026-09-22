@@ -1155,7 +1155,10 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
         "id": st.session_state.next_order_id,
         "created": datetime.now().strftime("%d %b %Y, %I:%M %p"),
         "created_iso": datetime.now().isoformat(),
-        "items": [{"name": p["name"], "quantity": q, "total": p["price"] * q} for p, q in purchased_rows],
+        "items": [
+            {"product_id": p["id"], "name": p["name"], "quantity": q, "total": p["price"] * q}
+            for p, q in purchased_rows
+        ],
         "total": total,
         "address": f"{address}, {city} - {pincode}",
         "status": "Placed",
@@ -1186,6 +1189,31 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
     st.balloons()
 
 
+def cancel_order(order):
+    if order.get("status") not in {"Placed", "Confirmed", "Preparing"}:
+        return False
+    for item in order.get("items", []):
+        product = next(
+            (
+                product for product in st.session_state.products
+                if product.get("id") == item.get("product_id")
+                or (
+                    not item.get("product_id")
+                    and product.get("name") == item.get("name")
+                    and product.get("farmer_id") == order.get("farmer_id")
+                )
+            ),
+            None,
+        )
+        if product:
+            product["stock"] = int(product.get("stock", 0)) + int(item.get("quantity", 0))
+    order["status"] = "Cancelled"
+    order["payment_status"] = "Not collected"
+    order["cancelled_at"] = datetime.now().isoformat()
+    save_cloud_snapshot()
+    return True
+
+
 def render_orders():
     orders = [order for order in st.session_state.orders if order.get("owner_email") == st.session_state.authenticated_user]
     if not orders:
@@ -1210,6 +1238,11 @@ def render_orders():
             )
             if order.get("route_url"):
                 st.markdown(f"[View live delivery route]({order['route_url']})")
+            if order.get("status") in {"Placed", "Confirmed", "Preparing"}:
+                if st.button("Cancel order", key=f"cancel-order-{order['id']}", type="secondary"):
+                    if cancel_order(order):
+                        st.success(f"Your order #{order['id']} was cancelled immediately.")
+                        st.rerun()
 
 
 def farmer_view():
@@ -1606,9 +1639,12 @@ def admin_view():
         st.dataframe(pd.DataFrame(order_data), use_container_width=True, hide_index=True)
         st.caption("Demo controls: advance an order status to preview fulfillment management.")
         selected = st.selectbox("Order", [o["id"] for o in st.session_state.orders])
-        new_status = st.selectbox("Set status", ORDER_STATUSES)
+        new_status = st.selectbox("Set status", ORDER_STATUSES + ["Cancelled"])
         if st.button("Update order status"):
-            next(order for order in st.session_state.orders if order["id"] == selected)["status"] = new_status
+            selected_order = next(order for order in st.session_state.orders if order["id"] == selected)
+            selected_order["status"] = new_status
+            if new_status == "Cancelled":
+                selected_order["payment_status"] = "Not collected"
             save_cloud_snapshot()
             st.success(f"Order #{selected} updated to {new_status}.")
 
