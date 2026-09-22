@@ -996,9 +996,9 @@ def streamlit_fragment(**kwargs):
 
 
 def customer_view():
-    sync_cloud_snapshot()
     st.title("🌱 Shop directly from local farms")
     st.write("Fresh produce, fair prices, and transparent farmer relationships.")
+    st.success("All farmer listings are shared across customer accounts and refresh automatically.")
     cart_count = sum(st.session_state.cart.values())
     tabs = st.tabs(["Browse products", f"Cart ({cart_count})", "My orders"])
 
@@ -1596,6 +1596,13 @@ def main():
     st.sidebar.title("AgriDirect")
     st.sidebar.caption("Farm fresh. Fairly traded. Directly delivered.")
     user = st.session_state.users[st.session_state.authenticated_user]
+    # Load the latest shared users, listings, and orders before rendering any
+    # authenticated dashboard, including newly registered customer sessions.
+    sync_cloud_snapshot()
+    user = st.session_state.users.get(st.session_state.authenticated_user)
+    if not user:
+        st.session_state.authenticated_user = None
+        st.rerun()
     role = user["role"]
     st.sidebar.success(f"Signed in as @{user['username']}")
     ai_voice_mode(role)
