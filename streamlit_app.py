@@ -81,7 +81,8 @@ def initialize_database():
                 frs_photo BLOB,
                 frs_photo_name TEXT,
                 face_encoding TEXT,
-                last_face_verification TEXT
+                last_face_verification TEXT,
+                last_face_capture BLOB
             )
             """
         )
@@ -89,6 +90,8 @@ def initialize_database():
         if "frs_enabled" not in columns:
             connection.execute("ALTER TABLE users ADD COLUMN frs_enabled INTEGER NOT NULL DEFAULT 0")
             connection.execute("UPDATE users SET frs_enabled = 1 WHERE role IN ('Farmer', 'Admin')")
+        if "last_face_capture" not in columns:
+            connection.execute("ALTER TABLE users ADD COLUMN last_face_capture BLOB")
         connection.execute(
             """
             CREATE TABLE IF NOT EXISTS marketplace_state (
@@ -123,6 +126,7 @@ def load_database_users():
             "frs_photo_name": row["frs_photo_name"],
             "face_encoding": encoding,
             "last_face_verification": row["last_face_verification"],
+            "last_face_capture": row["last_face_capture"],
             "frs_enabled": bool(row["frs_enabled"]),
         }
     return users
@@ -135,8 +139,8 @@ def save_database_user(user):
             connection.execute(
             """
             INSERT INTO users
-                (email, username, role, password_hash, frs_photo, frs_photo_name, face_encoding, last_face_verification, frs_enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (email, username, role, password_hash, frs_photo, frs_photo_name, face_encoding, last_face_verification, last_face_capture, frs_enabled)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(email) DO UPDATE SET
                 username=excluded.username,
                 role=excluded.role,
@@ -145,6 +149,7 @@ def save_database_user(user):
                 frs_photo_name=excluded.frs_photo_name,
                 face_encoding=excluded.face_encoding,
                 last_face_verification=excluded.last_face_verification,
+                last_face_capture=excluded.last_face_capture,
                 frs_enabled=excluded.frs_enabled
             """,
                 (
@@ -156,6 +161,7 @@ def save_database_user(user):
                     user.get("frs_photo_name"),
                     json.dumps(user.get("face_encoding")) if user.get("face_encoding") else None,
                     user.get("last_face_verification"),
+                    user.get("last_face_capture"),
                     int(user.get("frs_enabled", user["role"] in {"Farmer", "Admin"})),
                 ),
             )
@@ -339,7 +345,14 @@ def save_cloud_snapshot():
     """Persist a complete snapshot locally and, when configured, to shared S3 storage."""
     payload = {
         "products": [{**product, "image_bytes": _encode_bytes(product.get("image_bytes"))} for product in st.session_state.products],
-        "users": {email: {**user, "frs_photo": _encode_bytes(user.get("frs_photo"))} for email, user in st.session_state.users.items()},
+        "users": {
+            email: {
+                **user,
+                "frs_photo": _encode_bytes(user.get("frs_photo")),
+                "last_face_capture": _encode_bytes(user.get("last_face_capture")),
+            }
+            for email, user in st.session_state.users.items()
+        },
         "orders": st.session_state.orders,
     }
     local_saved = save_local_snapshot(payload)
@@ -391,6 +404,7 @@ def sync_cloud_snapshot():
         st.session_state.users = snapshot["users"]
         for user in st.session_state.users.values():
             user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
+            user["last_face_capture"] = _decode_bytes(user.get("last_face_capture"))
             user.setdefault("frs_enabled", user.get("role") in {"Farmer", "Admin"})
         st.session_state.users = enforce_single_admin(
             st.session_state.users, configured_admin_account()
@@ -452,6 +466,7 @@ def seed_state():
             st.session_state.users = snapshot["users"]
             for user in st.session_state.users.values():
                 user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
+                user["last_face_capture"] = _decode_bytes(user.get("last_face_capture"))
         for user in st.session_state.users.values():
             save_database_user(user)
     admin = configured_admin_account()
@@ -939,6 +954,7 @@ def daily_farmer_verification():
             st.warning("Camera access is required for today's FRS verification.")
             return False
         user["last_face_verification"] = date.today().isoformat()
+        user["last_face_capture"] = camera_capture.getvalue()
         save_database_user(user)
         save_cloud_snapshot()
         st.success("Daily FRS camera verification complete.")
@@ -952,6 +968,7 @@ def daily_farmer_verification():
         return False
     if verify_face(photo.getvalue(), user["face_encoding"]):
         user["last_face_verification"] = date.today().isoformat()
+        user["last_face_capture"] = photo.getvalue()
         save_database_user(user)
         save_cloud_snapshot()
         st.success("Daily verification complete.")
@@ -1570,6 +1587,7 @@ def admin_view():
                 "Face matching": "Enabled" if user.get("face_encoding") else "Optional/unavailable",
                 "FRS": "Active" if user.get("frs_enabled", True) else "Disabled",
                 "Last daily verification": user.get("last_face_verification") or "Not verified today",
+                "Latest capture": "Saved" if user.get("last_face_capture") else "Not captured",
             }
             for user in farmer_users
         ]
@@ -1592,6 +1610,7 @@ def admin_view():
                 st.error("This farmer has no enrolled face profile. Register the farmer with an FRS photo first.")
             elif verify_face(admin_camera_photo.getvalue(), selected_profile["face_encoding"]):
                 selected_profile["last_face_verification"] = date.today().isoformat()
+                selected_profile["last_face_capture"] = admin_camera_photo.getvalue()
                 save_database_user(selected_profile)
                 save_cloud_snapshot()
                 st.success(f"FRS camera verification completed for @{selected_profile['username']}.")

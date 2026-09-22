@@ -77,6 +77,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Forgot-password flow that replaces the saved PBKDF2 password hash for an existing local account
 - Farmer FRS profile photo enrollment and farmer-only profile details
 - Daily farmer verification with camera access when optional face matching is available
+- Successful FRS camera captures are saved in the local database as the latest verification capture; the enrolled profile photo remains unchanged
 - Admin-only farmer FRS verification status and reset controls
 - Admin FRS camera capture and verification for a selected farmer
 - FRS activation controls for farmers and the administrator, with daily camera access
