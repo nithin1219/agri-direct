@@ -1065,7 +1065,7 @@ def render_cart():
     st.divider()
     st.metric("Subtotal", money(subtotal))
     st.caption(f"Delivery fee: {money(DELIVERY_FEE)} · Total: {money(subtotal + DELIVERY_FEE)}")
-    with st.expander("Checkout with Cash on Delivery", expanded=True):
+    with st.expander("Checkout and complete purchase", expanded=True):
         context_options = {
             f"{product['name']} · {product['farmer']} ({product_location(product)})": product
             for product, _ in rows
@@ -1089,7 +1089,12 @@ def render_cart():
                 step=0.5,
                 help="Used only when both farmer and customer coordinates are not available.",
             )
-            submitted = st.form_submit_button("Place COD order", type="primary", use_container_width=True)
+            payment_method = st.selectbox(
+                "Payment option",
+                ["Cash on Delivery", "UPI (demo)", "Card (demo)", "Net banking (demo)"],
+                help="COD is recorded for payment at delivery. Other options create a demo transaction reference; connect a payment gateway before accepting real online payments.",
+            )
+            submitted = st.form_submit_button("Complete purchase", type="primary", use_container_width=True)
         if submitted:
             if not address.strip() or len(pincode.strip()) != 6 or not pincode.isdigit():
                 st.error("Enter a delivery address and a valid 6-digit PIN code.")
@@ -1114,7 +1119,7 @@ def render_cart():
                 )
                 place_order(
                     address.strip(), city.strip(), pincode.strip(), subtotal + DELIVERY_FEE,
-                    selected_product, distance, eta, destination,
+                    selected_product, distance, eta, destination, payment_method,
                 )
 
 
@@ -1122,8 +1127,9 @@ def update_quantity(product_id):
     st.session_state.cart[product_id] = st.session_state[f"qty-{product_id}"]
 
 
-def place_order(address, city, pincode, total, context_product, distance_km, eta_minutes, destination):
+def place_order(address, city, pincode, total, context_product, distance_km, eta_minutes, destination, payment_method):
     purchased_rows = cart_rows()
+    transaction_id = f"AGR-{datetime.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3).upper()}"
     order = {
         "id": st.session_state.next_order_id,
         "created": datetime.now().strftime("%d %b %Y, %I:%M %p"),
@@ -1132,7 +1138,9 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
         "total": total,
         "address": f"{address}, {city} - {pincode}",
         "status": "Placed",
-        "payment": "Cash on Delivery",
+        "payment": payment_method,
+        "payment_status": "Pay at delivery" if payment_method == "Cash on Delivery" else "Demo confirmed",
+        "transaction_id": transaction_id,
         "owner_email": st.session_state.authenticated_user,
         "farmer": context_product.get("farmer"),
         "farmer_id": context_product.get("farmer_id"),
@@ -1149,8 +1157,11 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
         product["stock"] -= quantity
     st.session_state.cart.clear()
     save_cloud_snapshot()
-    st.success(f"Thank you for your purchase! Order #{order['id']} was placed successfully.")
-    st.info(f"Your total is {money(total)}. Payment method: Cash on Delivery.")
+    st.success(f"Purchase completed successfully! Order #{order['id']} was created.")
+    st.info(
+        f"Transaction **{transaction_id}** · Total **{money(total)}** · "
+        f"Payment: **{payment_method}** ({order['payment_status']})."
+    )
     st.balloons()
 
 
@@ -1166,7 +1177,9 @@ def render_orders():
             columns[1].write(" · ".join(f"{item['name']} × {item['quantity']}" for item in order["items"]))
             columns[2].metric(order["status"], money(order["total"]))
             st.caption(
-                f"{order['payment']} · Deliver to {order['address']} · "
+                f"{order['payment']} ({order.get('payment_status', 'Recorded')}) · "
+                f"Transaction: {order.get('transaction_id', 'Legacy order')} · "
+                f"Deliver to {order['address']} · "
                 f"Farmer: {order.get('farmer', 'Not recorded')} ({order.get('farmer_location', 'Location not provided')})"
             )
             st.caption(
@@ -1330,11 +1343,13 @@ def admin_view():
     with report_tabs[2]:
         history = [
             {
-                "Order": order["id"], "Date": order["created"], "Customer": order.get("owner_email", "—"),
+                "Order": order["id"], "Transaction": order.get("transaction_id", "Legacy order"),
+                "Date": order["created"], "Customer": order.get("owner_email", "—"),
                 "Listing": order.get("listing", "—"), "Farmer": order.get("farmer", "—"),
                 "Farmer location": order.get("farmer_location", "—"), "Distance (km)": order.get("distance_km", "—"),
                 "ETA (min)": order.get("eta_minutes", "—"), "Total": money(order["total"]),
-                "Status": order["status"], "Delivery": order["address"],
+                "Status": order["status"], "Payment": order.get("payment", "—"),
+                "Payment status": order.get("payment_status", "—"), "Delivery": order["address"],
             }
             for order in st.session_state.orders
         ]
