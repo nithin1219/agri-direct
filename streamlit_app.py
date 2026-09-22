@@ -563,6 +563,43 @@ def registration_view():
         st.rerun()
 
 
+def password_reset_view():
+    st.subheader("Reset your password")
+    st.caption("Use the email address or username saved on this local AgriDirect deployment.")
+    with st.form("password-reset-form"):
+        identity = st.text_input("Registered email or username", key="reset-identity")
+        new_password = st.text_input("New password", type="password", key="reset-password")
+        confirm_password = st.text_input("Confirm new password", type="password", key="reset-confirm")
+        reset_submitted = st.form_submit_button("Save new password", type="primary", use_container_width=True)
+    if reset_submitted:
+        login_value = identity.strip().lower()
+        user = st.session_state.users.get(login_value)
+        if not user:
+            user = next(
+                (candidate for candidate in st.session_state.users.values()
+                 if candidate.get("username") == login_value),
+                None,
+            )
+        if not user:
+            st.error("No account was found for that email or username.")
+        elif len(new_password) < 8:
+            st.error("Password must be at least 8 characters.")
+        elif new_password != confirm_password:
+            st.error("Passwords do not match.")
+        else:
+            user["password"] = password_hash(new_password)
+            if save_database_user(user):
+                save_cloud_snapshot()
+                st.session_state.pop("show_password_reset", None)
+                st.success("Your password was reset successfully. Sign in with the new password.")
+                st.rerun()
+            else:
+                st.error("The password could not be saved. Check the database location and try again.")
+    if st.button("Back to sign in", key="back-from-password-reset"):
+        st.session_state.pop("show_password_reset", None)
+        st.rerun()
+
+
 def authentication_view():
     st.title("🌱 Welcome to AgriDirect")
     st.success("Welcome! Sign in to continue to your AgriDirect marketplace.")
@@ -655,6 +692,9 @@ def authentication_view():
     if st.session_state.get("show_create_account"):
         registration_view()
         return
+    if st.session_state.get("show_password_reset"):
+        password_reset_view()
+        return
     login_tab, register_tab = st.tabs(["Sign in", "Create account"])
     with login_tab:
         with st.form("login-form"):
@@ -677,6 +717,9 @@ def authentication_view():
                 st.error("Invalid email or password.")
         if st.button("Create account", use_container_width=True, key="create-account-below-signin"):
             st.session_state["show_create_account"] = True
+            st.rerun()
+        if st.button("Forgot password?", use_container_width=True, key="forgot-password"):
+            st.session_state["show_password_reset"] = True
             st.rerun()
         if st.session_state.get("show_create_account"):
             st.info("Open the Create account tab above to register once. Your account is saved for future sign-ins.")

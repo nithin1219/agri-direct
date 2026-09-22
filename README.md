@@ -74,6 +74,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Farmer Registration System (FRS) with username login, farmer registration, hashed passwords, and sign-out
 - Registered email addresses, usernames, roles, and hashed passwords are stored in SQLite for later logins
 - Immediate account creation after valid registration details
+- Forgot-password flow that replaces the saved PBKDF2 password hash for an existing local account
 - Farmer FRS profile photo enrollment and farmer-only profile details
 - Daily farmer verification with camera access when optional face matching is available
 - Admin-only farmer FRS verification status and reset controls
@@ -112,11 +113,15 @@ The seeded administrator can review farmer FRS profile-photo status, face-matchi
 
 New customer and farmer accounts can be registered from the sign-in screen. Signed-in farmers can publish listings with price, stock, description, and image URL; those images appear in the customer product cards. Customer orders are scoped to the signed-in account, while farmer listings are scoped to the signed-in farmer.
 
+Farmer listings are saved to the persistent SQLite marketplace snapshot (and optional S3 snapshot) when published. They remain available after sign-out, restart, and new customer registration, and are refreshed into both customer and farmer dashboards.
+
 Farmers can add a farm/town location, optional latitude/longitude, and crop details to each listing. Customers see those details in the marketplace and select a listing as the purchase context at checkout. If both the farmer and customer provide coordinates, distance is calculated locally with the Haversine formula; otherwise customers can enter an approximate distance or continue without geolocation. ETA is clearly labeled as an estimate using a 20–30 minute baseline plus a small distance adjustment. Route links use Google Maps and OpenStreetMap directly and do not require API keys.
 
 Orders, including farmer/location/distance/ETA metadata, are included in the existing SQLite snapshot and optional S3 snapshot. Administrators can review daily income, transaction status totals, and the complete order history from the dashboard.
 
 Checkout uses Cash on Delivery only. Every completed purchase receives an order number and transaction reference, clears the cart, reduces stock, and appears in customer order history and the Admin transaction reports. No simulated online payment is presented or marked as successful.
+
+If a user forgets a password, select **Forgot password?** on the sign-in page, enter the registered email or username, and save a new password of at least eight characters. This is a local-deployment recovery flow; use the deployment's normal access controls and persistent storage.
 
 Customers can cancel an order while it is Placed, Confirmed, or Preparing. Cancellation immediately marks the order as Cancelled, restores the reserved quantities to marketplace stock, records the cancellation time, and shows the confirmation in order history. Orders already Out for delivery or Delivered cannot be cancelled from the customer dashboard.
 
