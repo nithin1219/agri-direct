@@ -342,10 +342,10 @@ def save_cloud_snapshot():
         "users": {email: {**user, "frs_photo": _encode_bytes(user.get("frs_photo"))} for email, user in st.session_state.users.items()},
         "orders": st.session_state.orders,
     }
-    save_local_snapshot(payload)
+    local_saved = save_local_snapshot(payload)
     bucket, region = storage_config()
     if not bucket or boto3 is None:
-        return
+        return local_saved
     try:
         boto3.client("s3", region_name=region).put_object(
             Bucket=bucket,
@@ -355,7 +355,8 @@ def save_cloud_snapshot():
         )
     except (BotoCoreError, ClientError, OSError, ValueError):
         # Cloud credentials are optional; never make checkout or publishing fail.
-        return
+        return local_saved
+    return local_saved
 
 
 def clear_persisted_marketplace():
@@ -1375,9 +1376,13 @@ def farmer_view():
                     "image_name": product_upload.name if product_upload else None,
                 })
                 st.session_state.next_product_id += 1
-                save_cloud_snapshot()
-                st.success("Your product is now live in the marketplace.")
-                st.rerun()
+                if save_cloud_snapshot():
+                    st.success("Your product is saved permanently and is now live in every customer marketplace.")
+                    st.rerun()
+                else:
+                    st.session_state.products.pop()
+                    st.session_state.next_product_id -= 1
+                    st.error("The listing could not be saved to the database. Your product was not published; try again.")
     st.subheader("Your listings")
     if mine:
         st.dataframe(pd.DataFrame(mine)[["name", "category", "price", "unit", "stock", "organic"]], use_container_width=True, hide_index=True)
