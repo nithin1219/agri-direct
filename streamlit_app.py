@@ -1343,6 +1343,36 @@ def admin_view():
     farmer_users = [
         user for user in st.session_state.users.values() if user["role"] == "Farmer"
     ]
+    st.subheader("Registered farmer details")
+    farmer_rows = []
+    for user in farmer_users:
+        listings = [
+            product for product in st.session_state.products
+            if product.get("farmer_id") == user["email"]
+        ]
+        locations = sorted({
+            product.get("farmer_location", "Location not provided")
+            for product in listings
+        })
+        crops = sorted({
+            product.get("crop_details", "Not provided")
+            for product in listings
+        })
+        farmer_rows.append({
+            "Farmer": f"@{user['username']}",
+            "Email": user["email"],
+            "FRS photo": "Saved" if user.get("frs_photo") else "Missing",
+            "Face matching": "Enabled" if user.get("face_encoding") else "Unavailable",
+            "FRS status": "Active" if user.get("frs_enabled", True) else "Disabled",
+            "Listings": len(listings),
+            "Farm locations": " | ".join(locations) if locations else "No listing yet",
+            "Crop details": " | ".join(crops) if crops else "No crop details yet",
+        })
+    if farmer_rows:
+        st.dataframe(pd.DataFrame(farmer_rows), use_container_width=True, hide_index=True)
+        st.caption("This table updates whenever a farmer registers or publishes a new crop listing.")
+    else:
+        st.info("No farmer accounts have been registered yet.")
     if farmer_users:
         verification_rows = [
             {
