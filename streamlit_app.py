@@ -1089,11 +1089,7 @@ def render_cart():
                 step=0.5,
                 help="Used only when both farmer and customer coordinates are not available.",
             )
-            payment_method = st.selectbox(
-                "Payment option",
-                ["Cash on Delivery", "UPI (demo)", "Card (demo)", "Net banking (demo)"],
-                help="COD is recorded for payment at delivery. Other options create a demo transaction reference; connect a payment gateway before accepting real online payments.",
-            )
+            st.info("Payment option: Cash on Delivery. Payment is collected when the order is delivered.")
             submitted = st.form_submit_button("Complete purchase", type="primary", use_container_width=True)
         if submitted:
             if not address.strip() or len(pincode.strip()) != 6 or not pincode.isdigit():
@@ -1119,7 +1115,7 @@ def render_cart():
                 )
                 place_order(
                     address.strip(), city.strip(), pincode.strip(), subtotal + DELIVERY_FEE,
-                    selected_product, distance, eta, destination, payment_method,
+                    selected_product, distance, eta, destination,
                 )
 
 
@@ -1127,7 +1123,7 @@ def update_quantity(product_id):
     st.session_state.cart[product_id] = st.session_state[f"qty-{product_id}"]
 
 
-def place_order(address, city, pincode, total, context_product, distance_km, eta_minutes, destination, payment_method):
+def place_order(address, city, pincode, total, context_product, distance_km, eta_minutes, destination):
     purchased_rows = cart_rows()
     transaction_id = f"AGR-{datetime.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3).upper()}"
     order = {
@@ -1138,8 +1134,8 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
         "total": total,
         "address": f"{address}, {city} - {pincode}",
         "status": "Placed",
-        "payment": payment_method,
-        "payment_status": "Pay at delivery" if payment_method == "Cash on Delivery" else "Demo confirmed",
+        "payment": "Cash on Delivery",
+        "payment_status": "Pay at delivery",
         "transaction_id": transaction_id,
         "owner_email": st.session_state.authenticated_user,
         "farmer": context_product.get("farmer"),
@@ -1160,7 +1156,7 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
     st.success(f"Purchase completed successfully! Order #{order['id']} was created.")
     st.info(
         f"Transaction **{transaction_id}** · Total **{money(total)}** · "
-        f"Payment: **{payment_method}** ({order['payment_status']})."
+        f"Payment: **Cash on Delivery** ({order['payment_status']})."
     )
     st.balloons()
 

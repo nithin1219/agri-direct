@@ -83,7 +83,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Product browsing, search, category and organic filters
 - Newly published farmer listings become visible to every customer marketplace view automatically every second; SQLite persistence works locally and optional S3 snapshots synchronize separate replicas
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
-- Cart quantity management, address checkout, payment selection, transaction confirmation, and order history
+- Cart quantity management, address checkout, Cash on Delivery confirmation, transaction reference, and order history
 - Welcome message at sign-in and thank-you confirmation after completed purchases
 - Customer order history and fulfillment status
 - Farmer product creation and inventory view
@@ -116,7 +116,7 @@ Farmers can add a farm/town location, optional latitude/longitude, and crop deta
 
 Orders, including farmer/location/distance/ETA metadata, are included in the existing SQLite snapshot and optional S3 snapshot. Administrators can review daily income, transaction status totals, and the complete order history from the dashboard.
 
-Checkout supports Cash on Delivery plus demo UPI, card, and net-banking selections. Every completed purchase receives an order number and transaction reference, clears the cart, reduces stock, and appears in customer order history and the Admin transaction reports. The non-COD options are local demo confirmations only; connect a PCI-compliant payment gateway before accepting real online payments.
+Checkout uses Cash on Delivery only. Every completed purchase receives an order number and transaction reference, clears the cart, reduces stock, and appears in customer order history and the Admin transaction reports. No simulated online payment is presented or marked as successful.
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
 
