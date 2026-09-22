@@ -1291,11 +1291,21 @@ def admin_view():
         if order_date(order) == today
     ]
     daily_income = sum(order["total"] for order in daily_orders)
-    columns = st.columns(4)
+    pending_cod = sum(
+        order["total"] for order in st.session_state.orders
+        if order.get("status") != "Delivered"
+    )
+    columns = st.columns(5)
     columns[0].metric("Products", len(st.session_state.products))
     columns[1].metric("Farmers", farmers)
     columns[2].metric("Orders", len(st.session_state.orders))
-    columns[3].metric("Session revenue", money(revenue))
+    columns[3].metric("Total income", money(revenue), help="Gross value of all COD orders recorded by this deployment.")
+    columns[4].metric("Pending COD", money(pending_cod), help="Order value not yet marked Delivered.")
+    st.caption(
+        f"Income today: **{money(daily_income)}** · "
+        f"All-time gross income: **{money(revenue)}** · "
+        "Amounts update when customers place orders and when order status changes."
+    )
     report_tabs = st.tabs(["Daily income", "Transaction summary", "Full order history"])
     with report_tabs[0]:
         st.metric("Today's income", money(daily_income), help="Completed or placed COD order value recorded today.")
@@ -1430,6 +1440,38 @@ def admin_view():
             st.rerun()
     else:
         st.info("No farmer accounts have been registered yet.")
+    st.subheader("Live farmer location map")
+    map_rows = []
+    seen_farmer_ids = set()
+    for product in st.session_state.products:
+        farmer_id = product.get("farmer_id")
+        latitude = product.get("farmer_lat")
+        longitude = product.get("farmer_lon")
+        if farmer_id in seen_farmer_ids or latitude is None or longitude is None:
+            continue
+        try:
+            latitude = float(latitude)
+            longitude = float(longitude)
+        except (TypeError, ValueError):
+            continue
+        if -90 <= latitude <= 90 and -180 <= longitude <= 180:
+            seen_farmer_ids.add(farmer_id)
+            map_rows.append({
+                "lat": latitude,
+                "lon": longitude,
+                "farmer": product.get("farmer", farmer_id or "Farmer"),
+                "location": product.get("farmer_location", "Location not provided"),
+            })
+    if map_rows:
+        st.map(pd.DataFrame(map_rows), latitude="lat", longitude="lon", zoom=8, size=180)
+        st.caption("Map markers use farmer coordinates saved with their latest crop listings and refresh with the dashboard.")
+        st.dataframe(
+            pd.DataFrame(map_rows)[["farmer", "location", "lat", "lon"]],
+            use_container_width=True,
+            hide_index=True,
+        )
+    else:
+        st.info("No valid farmer coordinates are available yet. Ask farmers to add latitude and longitude when publishing a listing.")
     st.subheader("Marketplace inventory")
     inventory = pd.DataFrame(st.session_state.products)
     for column, default in {"farmer_location": "Location not provided", "crop_details": ""}.items():
