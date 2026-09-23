@@ -215,6 +215,14 @@ def database_account_exists(email, username):
         return False
 
 
+def merge_persistent_users(users):
+    """Keep SQLite accounts authoritative across browser sessions and snapshots."""
+    database_users = load_database_users()
+    for email, user in database_users.items():
+        users[email] = user
+    return users
+
+
 def load_local_snapshot():
     """Load marketplace data from the persistent SQLite store used by this deployment."""
     try:
@@ -418,7 +426,7 @@ def sync_cloud_snapshot():
             product.setdefault("crop_details", product.get("description", ""))
     if snapshot.get("users") is not None:
         current_email = st.session_state.get("authenticated_user")
-        st.session_state.users = snapshot["users"]
+        st.session_state.users = merge_persistent_users(dict(snapshot["users"]))
         for user in st.session_state.users.values():
             user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
             user["last_face_capture"] = _decode_bytes(user.get("last_face_capture"))
@@ -469,7 +477,7 @@ def seed_state():
         max((order.get("id", 1000) for order in st.session_state.orders), default=1000) + 1,
     )
     if "users" not in st.session_state:
-        st.session_state.users = load_database_users() or {
+        st.session_state.users = merge_persistent_users({
             email: {
                 "email": email,
                 "role": role,
@@ -478,12 +486,13 @@ def seed_state():
                 "frs_enabled": role in {"Farmer", "Admin"},
             }
             for email, (role, password, username) in DEMO_ACCOUNTS.items()
-        }
+        })
         if snapshot and snapshot.get("users"):
-            st.session_state.users = snapshot["users"]
+            st.session_state.users.update(snapshot["users"])
             for user in st.session_state.users.values():
                 user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
                 user["last_face_capture"] = _decode_bytes(user.get("last_face_capture"))
+            st.session_state.users = merge_persistent_users(st.session_state.users)
         for user in st.session_state.users.values():
             save_database_user(user)
     admin = configured_admin_account()
