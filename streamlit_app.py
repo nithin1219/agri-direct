@@ -254,9 +254,26 @@ def password_hash(password, salt=None):
 
 
 def password_matches(password, stored_hash):
-    salt, expected = stored_hash.split("$", 1)
-    actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
-    return secrets.compare_digest(actual, expected)
+    try:
+        salt, expected = stored_hash.split("$", 1)
+        actual = hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 120_000).hex()
+        return secrets.compare_digest(actual, expected)
+    except (AttributeError, TypeError, ValueError):
+        return False
+
+
+def find_account(identity):
+    login_value = (identity or "").strip().lower()
+    user = st.session_state.users.get(login_value)
+    if user:
+        return user
+    return next(
+        (
+            candidate for candidate in st.session_state.users.values()
+            if candidate.get("username", "").strip().lower() == login_value
+        ),
+        None,
+    )
 
 
 def configured_admin_account():
@@ -588,14 +605,7 @@ def password_reset_view():
         confirm_password = st.text_input("Confirm new password", type="password", key="reset-confirm")
         reset_submitted = st.form_submit_button("Save new password", type="primary", use_container_width=True)
     if reset_submitted:
-        login_value = identity.strip().lower()
-        user = st.session_state.users.get(login_value)
-        if not user:
-            user = next(
-                (candidate for candidate in st.session_state.users.values()
-                 if candidate.get("username") == login_value),
-                None,
-            )
+        user = find_account(identity)
         if not user:
             st.error("No account was found for that email or username.")
         elif len(new_password) < 8:
@@ -718,10 +728,7 @@ def authentication_view():
             password = st.text_input("Password", type="password")
             submitted = st.form_submit_button("Sign in", type="primary", use_container_width=True)
         if submitted:
-            login_value = email.strip().lower()
-            user = st.session_state.users.get(login_value)
-            if not user:
-                user = next((candidate for candidate in st.session_state.users.values() if candidate["username"] == login_value), None)
+            user = find_account(email)
             if user and password_matches(password, user["password"]):
                 if user["role"] == "Farmer":
                     st.session_state.pending_face_login = user["email"]
