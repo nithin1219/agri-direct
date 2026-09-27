@@ -99,6 +99,23 @@ def initialize_database():
             connection.execute("ALTER TABLE users ADD COLUMN last_face_capture BLOB")
         connection.execute(
             """
+            UPDATE users
+            SET face_encoding = NULL,
+                last_face_capture = NULL,
+                last_face_verification = NULL,
+                frs_photo = CASE
+                    WHEN frs_photo_name = 'first-login-face-capture' THEN NULL
+                    ELSE frs_photo
+                END,
+                frs_photo_name = CASE
+                    WHEN frs_photo_name = 'first-login-face-capture' THEN NULL
+                    ELSE frs_photo_name
+                END
+            WHERE role = 'Customer'
+            """
+        )
+        connection.execute(
+            """
             CREATE TABLE IF NOT EXISTS marketplace_state (
                 state_key TEXT PRIMARY KEY,
                 state_json TEXT NOT NULL,
@@ -219,6 +236,14 @@ def database_account_exists(email, username):
 
 def merge_persistent_users(users):
     """Keep SQLite accounts authoritative across browser sessions and snapshots."""
+    for user in users.values():
+        if user.get("role") == "Customer":
+            user["face_encoding"] = None
+            user["last_face_capture"] = None
+            user["last_face_verification"] = None
+            if user.get("frs_photo_name") == "first-login-face-capture":
+                user["frs_photo"] = None
+                user["frs_photo_name"] = None
     database_users = load_database_users()
     for email, user in database_users.items():
         users[email] = user
@@ -284,6 +309,16 @@ def find_account(identity):
         ),
         None,
     )
+
+
+def continue_after_password(user):
+    st.session_state.pop("pending_face_login", None)
+    if user["role"] in {"Farmer", "Admin"}:
+        st.session_state.authenticated_user = None
+        st.session_state.pending_face_login = user["email"]
+        return
+    st.session_state.authenticated_user = user["email"]
+    st.session_state.role = user["role"]
 
 
 def configured_admin_account():
@@ -691,12 +726,10 @@ def registration_view():
                 st.session_state.users[account["email"]] = account
                 save_cloud_snapshot()
                 st.session_state.pop("show_create_account", None)
+                continue_after_password(account)
                 if account_role in {"Farmer", "Admin"}:
-                    st.session_state.pending_face_login = account["email"]
                     st.success("Account created. Allow camera access to enroll or verify your face before entering AgriDirect.")
                 else:
-                    st.session_state.authenticated_user = account["email"]
-                    st.session_state.role = account["role"]
                     st.success("Customer account created. You are now signed in.")
                 st.rerun()
     if st.button("Back to sign in", key="back-to-signin"):
@@ -798,6 +831,10 @@ def authentication_view():
             st.session_state.pop("pending_face_login", None)
             st.error("The pending face-login request is no longer valid.")
             return
+        if pending_user["role"] == "Customer":
+            continue_after_password(pending_user)
+            st.rerun()
+            return
         enrolling_face = not pending_user.get("face_encoding")
         st.subheader("Save your face to finish sign-in" if enrolling_face else "Face verification required")
         if enrolling_face:
@@ -844,11 +881,7 @@ def authentication_view():
         if submitted:
             user = find_account(email)
             if user and password_matches(password, user["password"]):
-                if user["role"] in {"Farmer", "Admin"}:
-                    st.session_state.pending_face_login = user["email"]
-                else:
-                    st.session_state.authenticated_user = user["email"]
-                    st.session_state.role = user["role"]
+                continue_after_password(user)
                 st.rerun()
             else:
                 st.error("Invalid email or password.")
@@ -912,12 +945,10 @@ def authentication_view():
                 else:
                     st.session_state.users[account["email"]] = account
                     save_cloud_snapshot()
-                    if account_role in {"Farmer", "Admin"}:
-                        st.session_state.pending_face_login = account["email"]
+                    continue_after_password(account)
+                    if account["role"] in {"Farmer", "Admin"}:
                         st.success("Account created. Allow camera access to enroll or verify your face before entering AgriDirect.")
                     else:
-                        st.session_state.authenticated_user = account["email"]
-                        st.session_state.role = account["role"]
                         st.success("Customer account created. You are now signed in.")
                     st.rerun()
 
