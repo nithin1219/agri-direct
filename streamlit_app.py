@@ -7,6 +7,7 @@ local demos, classroom use, and quick deployment on Streamlit Community Cloud.
 from datetime import datetime
 from datetime import date
 import base64
+from contextlib import contextmanager
 import hashlib
 import io
 import json
@@ -63,10 +64,18 @@ IMAGE_TYPES = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff"]
 DATABASE_PATH = os.getenv("AGRIDIRECT_DATABASE", "agridirect_users.db")
 
 
+@contextmanager
 def database_connection():
     connection = sqlite3.connect(DATABASE_PATH)
     connection.row_factory = sqlite3.Row
-    return connection
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def initialize_database():
