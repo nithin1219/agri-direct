@@ -1052,8 +1052,9 @@ def current_user():
 
 def camera_permission_guidance():
     st.caption(
-        "Allow camera access when your browser prompts. Camera capture requires HTTPS or localhost; "
-        "plain-HTTP LAN links may be blocked by browser security."
+        "Allow camera access when your browser prompts; permission must be granted separately on each device. "
+        "Camera capture requires HTTPS or localhost. If access was blocked, enable Camera for this site in "
+        "the browser's site settings and reload; plain-HTTP LAN links may be blocked by browser security."
     )
 
 
