@@ -88,6 +88,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Working add-to-cart buttons with immediate cart-badge refresh, visible cart item summary, quantity management, address checkout, Cash on Delivery confirmation, transaction reference, immediate cancellation for Placed/Confirmed/Preparing orders, and order history
 - Welcome message at sign-in and thank-you confirmation after completed purchases
 - Customer order history and fulfillment status
+- Live order notifications refresh every five seconds in Admin and Farmer dashboards; each farmer receives only the items belonging to their listings, with customer, quantity, delivery, payment, and status details
 - Farmer product creation and inventory view
 - Farmer listings include farm location, optional coordinates, crop details, and nearby-farm visibility for customers
 - Checkout captures the selected farmer/listing, location, distance, ETA estimate, and no-key Google Maps/OpenStreetMap route links
@@ -128,7 +129,14 @@ Customers can cancel an order while it is Placed, Confirmed, or Preparing. Cance
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
 
-Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. Farmer password sign-in is followed by a camera face match; a different face or missing enrollment is rejected before the farmer session opens. The optional `face-recognition` package must be installed for this strict biometric login; if it is unavailable, farmer sign-in is blocked with a clear setup message rather than silently accepting an unverified face.
+Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. Farmer password sign-in is followed by a camera face match; a different face or missing enrollment is rejected before the farmer session opens. Strict face matching is enabled when `face-recognition` is installed. On Windows, install the verified prebuilt runtime without a Visual C++ build by running:
+
+```powershell
+python -m pip install "setuptools<81" dlib-bin==20.0.1 face-recognition-models==0.3.0
+python -m pip install --no-deps face-recognition==1.3.0
+```
+
+On Linux, install the platform's C++ build tools, CMake, and Python headers before installing `face-recognition`. If face matching is unavailable, farmer login is blocked with a clear setup message rather than silently accepting an unverified face.
 
 ### Optional voice and face features
 

@@ -1242,7 +1242,17 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
         "created": datetime.now().strftime("%d %b %Y, %I:%M %p"),
         "created_iso": datetime.now().isoformat(),
         "items": [
-            {"product_id": p["id"], "name": p["name"], "quantity": q, "total": p["price"] * q}
+            {
+                "product_id": p["id"],
+                "name": p["name"],
+                "quantity": q,
+                "total": p["price"] * q,
+                "farmer_id": p.get("farmer_id"),
+                "farmer": p.get("farmer", "Farmer"),
+                "farmer_location": product_location(p),
+                "crop_details": p.get("crop_details", ""),
+                "unit": p.get("unit", ""),
+            }
             for p, q in purchased_rows
         ],
         "total": total,
@@ -1273,6 +1283,98 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
         f"Payment: **Cash on Delivery** ({order['payment_status']})."
     )
     st.balloons()
+
+
+def items_for_farmer(order, farmer_id, products=None):
+    items = order.get("items", [])
+    product_by_id = {
+        product.get("id"): product for product in (products or [])
+    }
+    owned_items = []
+    ownership_known = False
+    for item in items:
+        item_farmer_id = item.get("farmer_id")
+        if not item_farmer_id and item.get("product_id") in product_by_id:
+            item_farmer_id = product_by_id[item["product_id"]].get("farmer_id")
+        if item_farmer_id:
+            ownership_known = True
+            if item_farmer_id == farmer_id:
+                owned_items.append(item)
+    if owned_items:
+        return owned_items
+    if not ownership_known and order.get("farmer_id") == farmer_id:
+        return items
+    return []
+
+
+@streamlit_fragment(run_every="5s")
+def farmer_order_notifications(farmer_id):
+    sync_cloud_snapshot()
+    farmer_orders = [
+        (order, items_for_farmer(order, farmer_id, st.session_state.products))
+        for order in st.session_state.orders
+    ]
+    farmer_orders = [
+        (order, items) for order, items in farmer_orders if items
+    ]
+    active_count = sum(
+        order.get("status") in {"Placed", "Confirmed", "Preparing", "Out for delivery"}
+        for order, _ in farmer_orders
+    )
+    farmer_orders = farmer_orders[:10]
+    st.subheader(f"🔔 Customer orders ({active_count} active)")
+    if not farmer_orders:
+        st.info("New orders for your products will appear here automatically.")
+        return
+    for order, items in farmer_orders:
+        details = ", ".join(
+            f"{item.get('name', 'Product')} × {item.get('quantity', 0)}"
+            for item in items
+        )
+        amount = sum(float(item.get("total", 0)) for item in items)
+        with st.container(border=True):
+            st.markdown(f"**Order #{order.get('id')} · {order.get('status', 'Placed')}**")
+            st.write(f"Items ordered: {details}")
+            st.caption(
+                f"Customer: {order.get('owner_email', '—')} · "
+                f"Your items total: {money(amount)} · "
+                f"{order.get('payment', 'Cash on Delivery')} · Placed: {order.get('created', '—')}"
+            )
+            st.caption(
+                f"Deliver to: {order.get('address', '—')} · "
+                f"Location: {items[0].get('farmer_location', order.get('farmer_location', '—'))}"
+            )
+
+
+@streamlit_fragment(run_every="5s")
+def admin_order_notifications():
+    sync_cloud_snapshot()
+    orders = st.session_state.orders[:10]
+    active_count = sum(
+        order.get("status") in {"Placed", "Confirmed", "Preparing", "Out for delivery"}
+        for order in st.session_state.orders
+    )
+    st.subheader(f"🔔 Order notifications ({active_count} active)")
+    if not orders:
+        st.info("Customer orders will appear here automatically.")
+        return
+    for order in orders:
+        item_details = ", ".join(
+            f"{item.get('name', 'Product')} × {item.get('quantity', 0)}"
+            for item in order.get("items", [])
+        )
+        with st.container(border=True):
+            st.markdown(
+                f"**Order #{order.get('id')} · {order.get('status', 'Placed')} · "
+                f"{money(float(order.get('total', 0)))}**"
+            )
+            st.write(f"Items: {item_details or order.get('listing', '—')}")
+            st.caption(
+                f"Customer: {order.get('owner_email', '—')} · "
+                f"Farmer: {order.get('farmer', '—')} · "
+                f"{order.get('payment', 'Cash on Delivery')} · {order.get('created', '—')}"
+            )
+            st.caption(f"Delivery address: {order.get('address', '—')}")
 
 
 def cancel_order(order):
@@ -1341,6 +1443,7 @@ def farmer_view():
     columns[0].metric("Your listings", len(mine))
     columns[1].metric("Available stock", sum(p["stock"] for p in mine))
     columns[2].metric("Marketplace status", "Active")
+    farmer_order_notifications(farmer_id)
     with st.expander("My FRS profile", expanded=True):
         st.write(f"**Username:** @{st.session_state.users[st.session_state.authenticated_user]['username']}")
         st.write(f"**Email:** {st.session_state.authenticated_user}")
@@ -1464,6 +1567,7 @@ def admin_view():
         f"All-time gross income: **{money(revenue)}** · "
         "Amounts update when customers place orders and when order status changes."
     )
+    admin_order_notifications()
     report_tabs = st.tabs(["Daily income", "Transaction summary", "Full order history"])
     with report_tabs[0]:
         st.metric("Today's income", money(daily_income), help="Completed or placed COD order value recorded today.")
@@ -1478,10 +1582,10 @@ def admin_view():
     with report_tabs[1]:
         status_counts = pd.Series([order["status"] for order in st.session_state.orders]).value_counts() if st.session_state.orders else pd.Series(dtype=int)
         summary = pd.DataFrame([
-            {"Metric": "All transactions", "Value": len(st.session_state.orders)},
+            {"Metric": "All transactions", "Value": str(len(st.session_state.orders))},
             {"Metric": "Gross order value", "Value": money(revenue)},
             {"Metric": "Average order value", "Value": money(revenue / len(st.session_state.orders)) if st.session_state.orders else money(0)},
-            *({"Metric": f"Orders — {status}", "Value": int(count)} for status, count in status_counts.items()),
+            *({"Metric": f"Orders — {status}", "Value": str(int(count))} for status, count in status_counts.items()),
         ])
         st.dataframe(summary, use_container_width=True, hide_index=True)
     with report_tabs[2]:
