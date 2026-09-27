@@ -76,6 +76,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Immediate account creation after valid registration details
 - Forgot-password flow that replaces the saved PBKDF2 password hash for an existing local account
 - Farmer FRS profile photo enrollment and farmer-only profile details
+- Every account uses password plus face verification: first successful password login enrolls and saves a camera face, and later logins require a face match
 - Daily farmer verification with camera access when optional face matching is available
 - Successful FRS camera captures are saved in the local database as the latest verification capture; the enrolled profile photo remains unchanged
 - Admin-only farmer FRS verification status and reset controls
@@ -132,7 +133,7 @@ Customers can cancel an order while it is Placed, Confirmed, or Preparing. Cance
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
 
-Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. Farmer password sign-in is followed by a camera face match; a different face or missing enrollment is rejected before the farmer session opens. Strict face matching is enabled when `face-recognition` is installed. On Windows, install the verified prebuilt runtime without a Visual C++ build by running:
+Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. New accounts are not signed in until they complete the camera enrollment/verification step after registration. Every account must pass password and camera face verification: on its first password-verified sign-in, a clear camera capture is enrolled and saved in SQLite; on subsequent sign-ins, the captured face must match the stored encoding or login is rejected. Successful verification saves the capture and date. Login stays blocked if face matching is unavailable; there is no password-only fallback. Strict face matching is enabled when `face-recognition` is installed. On Windows, install the verified prebuilt runtime without a Visual C++ build by running:
 
 ```powershell
 python -m pip install "setuptools<81" dlib-bin==20.0.1 face-recognition-models==0.3.0
@@ -141,9 +142,9 @@ python -m pip install --no-deps face-recognition==1.3.0
 
 On Linux, install the platform's C++ build tools, CMake, and Python headers before installing `face-recognition`. If face matching is unavailable, farmer login is blocked with a clear setup message rather than silently accepting an unverified face.
 
-### Optional voice and face features
+### Voice and face features
 
-The base install intentionally has no fragile native dependencies. `st.audio_input` is used when provided by the installed Streamlit version. To transcribe recorded WAV audio, optionally install `SpeechRecognition` and provide the audio service it uses; otherwise use the transcript/text box. The listing assistant is a reviewable, lightweight field-prefill foundation, not a guarantee of translation or medical/agronomic advice. Install `face-recognition` only when its native build dependencies are available; its absence enables the documented secure fallback.
+Face-matching dependencies are platform-specific in the root `requirements.txt`: Linux installs `face-recognition` and builds `dlib` (CMake, a C++ compiler, and Python development headers are required); Windows installs the prebuilt `dlib-bin`, then uses the `face-recognition --no-deps` command above. `st.audio_input` is used when provided by the installed Streamlit version. To transcribe recorded WAV audio, optionally install `SpeechRecognition` and provide the audio service it uses; otherwise use the transcript/text box. The listing assistant is a reviewable, lightweight field-prefill foundation, not a guarantee of translation or medical/agronomic advice.
 
 When `AGRI_S3_BUCKET` and AWS credentials are configured, the app restores users, hashed passwords, product listings, uploaded image bytes, orders, and verification dates from `agridirect/state.json`, then snapshots changes back to the same bucket. Do not store production credentials in source control; configure them as Streamlit secrets or deployment environment variables.
 

@@ -364,6 +364,36 @@ def verify_face(image_bytes, reference):
         return False
 
 
+def persist_login_face(user, image_bytes, enroll=False):
+    if face_recognition is None or np is None:
+        return False, "Face matching is unavailable. Login is blocked until the FRS runtime is installed."
+    if enroll:
+        encoding = face_encoding(image_bytes)
+        if not encoding:
+            return False, "No face was detected. Allow camera access and capture one clear, front-facing face."
+    elif not verify_face(image_bytes, user.get("face_encoding")):
+        return False, "Face mismatch. This account cannot be opened with a different face."
+
+    previous = {
+        key: user.get(key)
+        for key in ("face_encoding", "frs_photo", "frs_photo_name", "last_face_capture", "last_face_verification")
+    }
+    if enroll:
+        user["face_encoding"] = encoding
+        if not user.get("frs_photo"):
+            user["frs_photo"] = image_bytes
+            user["frs_photo_name"] = "first-login-face-capture"
+    user["last_face_capture"] = image_bytes
+    user["last_face_verification"] = date.today().isoformat()
+    if not save_database_user(user):
+        user.update(previous)
+        return False, "Face enrollment could not be saved to the account database."
+    snapshot_saved = save_cloud_snapshot()
+    if not snapshot_saved:
+        return True, "Face verified. The account face is saved in SQLite; shared snapshot storage is unavailable."
+    return True, "Face enrolled and saved." if enroll else "Face matched. Sign-in complete."
+
+
 def storage_config():
     bucket = os.getenv("AGRI_S3_BUCKET")
     region = os.getenv("AWS_REGION")
@@ -604,10 +634,9 @@ def registration_view():
             else:
                 st.session_state.users[account["email"]] = account
                 save_cloud_snapshot()
-                st.session_state.authenticated_user = account["email"]
-                st.session_state.role = account["role"]
                 st.session_state.pop("show_create_account", None)
-                st.success("Account created successfully. Welcome to AgriDirect!")
+                st.session_state.pending_face_login = account["email"]
+                st.success("Account created. Allow camera access to enroll or verify your face before entering AgriDirect.")
                 st.rerun()
     if st.button("Back to sign in", key="back-to-signin"):
         st.session_state.pop("show_create_account", None)
@@ -708,30 +737,35 @@ def authentication_view():
             st.session_state.pop("pending_face_login", None)
             st.error("The pending face-login request is no longer valid.")
             return
-        st.subheader("Face verification required")
-        st.info("Password accepted. Capture the enrolled farmer's face to finish signing in.")
-        if face_recognition is None:
-            st.error("Face matching is unavailable on this deployment. A native face-recognition installation is required for farmer login.")
+        enrolling_face = not pending_user.get("face_encoding")
+        st.subheader("Save your face to finish sign-in" if enrolling_face else "Face verification required")
+        if enrolling_face:
+            st.info("Password accepted. Capture your face once to securely enroll it; later logins must match this face.")
+        else:
+            st.info("Password accepted. Capture the saved account face to finish signing in.")
+        if face_recognition is None or np is None:
+            st.error("Face matching is unavailable on this deployment. Login is blocked until the native face-recognition runtime is installed.")
             if st.button("Cancel face verification", key="cancel-face-login"):
                 st.session_state.pop("pending_face_login", None)
                 st.rerun()
             return
-        if not pending_user.get("face_encoding"):
-            st.error("This farmer has no enrolled face profile and cannot sign in.")
-            if st.button("Cancel face verification", key="cancel-face-login-missing"):
-                st.session_state.pop("pending_face_login", None)
-                st.rerun()
-            return
-        face_capture = st.camera_input("Capture the enrolled farmer's face", key="login-face-capture")
+        face_capture = st.camera_input(
+            "Capture your face to enroll" if enrolling_face else "Capture the enrolled account face",
+            help="Allow browser camera permission and position one face clearly in the frame.",
+            key="login-face-capture",
+        )
         if face_capture:
-            if verify_face(face_capture.getvalue(), pending_user["face_encoding"]):
+            matched, message = persist_login_face(
+                pending_user, face_capture.getvalue(), enroll=enrolling_face
+            )
+            if matched:
                 st.session_state.pop("pending_face_login", None)
                 st.session_state.authenticated_user = pending_user["email"]
                 st.session_state.role = pending_user["role"]
-                st.success("Face matched. Sign-in complete.")
+                st.success(message)
                 st.rerun()
             else:
-                st.error("Face mismatch. This farmer account cannot be opened by another person.")
+                st.error(message)
         return
     if st.session_state.get("show_create_account"):
         registration_view()
@@ -748,11 +782,7 @@ def authentication_view():
         if submitted:
             user = find_account(email)
             if user and password_matches(password, user["password"]):
-                if user["role"] == "Farmer":
-                    st.session_state.pending_face_login = user["email"]
-                else:
-                    st.session_state.authenticated_user = user["email"]
-                    st.session_state.role = user["role"]
+                st.session_state.pending_face_login = user["email"]
                 st.rerun()
             else:
                 st.error("Invalid email or password.")
@@ -817,9 +847,8 @@ def authentication_view():
                 else:
                     st.session_state.users[account["email"]] = account
                     save_cloud_snapshot()
-                    st.session_state.authenticated_user = account["email"]
-                    st.session_state.role = account["role"]
-                    st.success("Your account is ready. Welcome to AgriDirect!")
+                    st.session_state.pending_face_login = account["email"]
+                    st.success("Account created. Allow camera access to enroll or verify your face before entering AgriDirect.")
                     st.rerun()
 
 
