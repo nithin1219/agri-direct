@@ -1275,8 +1275,16 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
     st.session_state.next_order_id += 1
     for product, quantity in purchased_rows:
         product["stock"] -= quantity
+    previous_cart = dict(st.session_state.cart)
     st.session_state.cart.clear()
-    save_cloud_snapshot()
+    if not save_cloud_snapshot():
+        st.session_state.orders.remove(order)
+        st.session_state.next_order_id -= 1
+        for product, quantity in purchased_rows:
+            product["stock"] += quantity
+        st.session_state.cart.update(previous_cart)
+        st.error("The order could not be saved to the database. No purchase was completed; please try again.")
+        return
     st.success(f"Purchase completed successfully! Order #{order['id']} was created.")
     st.info(
         f"Transaction **{transaction_id}** · Total **{money(total)}** · "
@@ -1328,7 +1336,8 @@ def farmer_order_notifications(farmer_id):
         return
     for order, items in farmer_orders:
         details = ", ".join(
-            f"{item.get('name', 'Product')} × {item.get('quantity', 0)}"
+            f"{item.get('name', 'Product')} × {item.get('quantity', 0)} "
+            f"{item.get('unit', '')} ({money(float(item.get('total', 0)))})"
             for item in items
         )
         amount = sum(float(item.get("total", 0)) for item in items)
@@ -1342,7 +1351,8 @@ def farmer_order_notifications(farmer_id):
             )
             st.caption(
                 f"Deliver to: {order.get('address', '—')} · "
-                f"Location: {items[0].get('farmer_location', order.get('farmer_location', '—'))}"
+                f"Farm: {items[0].get('farmer_location', order.get('farmer_location', '—'))} · "
+                f"ETA: {order.get('eta_minutes', '—')} min"
             )
 
 
@@ -1373,6 +1383,13 @@ def admin_order_notifications():
                 f"Customer: {order.get('owner_email', '—')} · "
                 f"Farmer: {order.get('farmer', '—')} · "
                 f"{order.get('payment', 'Cash on Delivery')} · {order.get('created', '—')}"
+            )
+            st.caption(
+                "Farmer split: " + " | ".join(
+                    f"{item.get('farmer', 'Farmer')}: {item.get('name', 'Product')} × "
+                    f"{item.get('quantity', 0)} ({money(float(item.get('total', 0)))})"
+                    for item in order.get("items", [])
+                )
             )
             st.caption(f"Delivery address: {order.get('address', '—')}")
 
@@ -1411,7 +1428,15 @@ def render_orders():
         with st.container(border=True):
             columns = st.columns([2, 2, 1])
             columns[0].markdown(f"**Order #{order['id']}**\n\n{order['created']}")
-            columns[1].write(" · ".join(f"{item['name']} × {item['quantity']}" for item in order["items"]))
+            columns[1].write(
+                "\n\n".join(
+                    f"**{item.get('name', 'Product')} × {item.get('quantity', 0)} "
+                    f"{item.get('unit', '')}** · {money(float(item.get('total', 0)))}\n\n"
+                    f"Farmer: {item.get('farmer', order.get('farmer', '—'))} · "
+                    f"{item.get('farmer_location', order.get('farmer_location', '—'))}"
+                    for item in order.get("items", [])
+                )
+            )
             columns[2].metric(order["status"], money(order["total"]))
             st.caption(
                 f"{order['payment']} ({order.get('payment_status', 'Recorded')}) · "
@@ -1593,7 +1618,12 @@ def admin_view():
             {
                 "Order": order["id"], "Transaction": order.get("transaction_id", "Legacy order"),
                 "Date": order["created"], "Customer": order.get("owner_email", "—"),
-                "Listing": order.get("listing", "—"), "Farmer": order.get("farmer", "—"),
+                "Items": " | ".join(
+                    f"{item.get('name', 'Product')} × {item.get('quantity', 0)} "
+                    f"({item.get('farmer', order.get('farmer', '—'))}; {money(float(item.get('total', 0)))})"
+                    for item in order.get("items", [])
+                ) or order.get("listing", "—"),
+                "Farmer": order.get("farmer", "—"),
                 "Farmer location": order.get("farmer_location", "—"), "Distance (km)": order.get("distance_km", "—"),
                 "ETA (min)": order.get("eta_minutes", "—"), "Total": money(order["total"]),
                 "Status": order["status"], "Payment": order.get("payment", "—"),

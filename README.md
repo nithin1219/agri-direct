@@ -89,6 +89,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Welcome message at sign-in and thank-you confirmation after completed purchases
 - Customer order history and fulfillment status
 - Live order notifications refresh every five seconds in Admin and Farmer dashboards; each farmer receives only the items belonging to their listings, with customer, quantity, delivery, payment, and status details
+- Complete order records are saved to the SQLite marketplace database before checkout is confirmed and are shown with item-level farmer, quantity, and price details in Customer, Farmer, and Admin dashboards
 - Farmer product creation and inventory view
 - Farmer listings include farm location, optional coordinates, crop details, and nearby-farm visibility for customers
 - Checkout captures the selected farmer/listing, location, distance, ETA estimate, and no-key Google Maps/OpenStreetMap route links
@@ -122,6 +123,8 @@ Farmers can add a farm/town location, optional latitude/longitude, and crop deta
 Orders, including farmer/location/distance/ETA metadata, are included in the existing SQLite snapshot and optional S3 snapshot. Administrators can review daily income, transaction status totals, and the complete order history from the dashboard.
 
 Checkout uses Cash on Delivery only. Every completed purchase receives an order number and transaction reference, clears the cart, reduces stock, and appears in customer order history and the Admin transaction reports. No simulated online payment is presented or marked as successful.
+
+Order placement is confirmed only after the complete order and updated inventory are saved to SQLite; if the write fails, inventory and cart contents are restored and checkout reports an error. Each order preserves the customer, all ordered items, item-level farmer ownership, quantities and amounts, address, payment method, ETA, and status for customer history, per-farmer notifications, and Admin reports.
 
 If a user forgets a password, select **Forgot password?** on the sign-in page, enter the registered email or username, and save a new password of at least eight characters. This is a local-deployment recovery flow; use the deployment's normal access controls and persistent storage.
 
