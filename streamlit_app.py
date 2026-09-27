@@ -19,7 +19,6 @@ import sqlite3
 from urllib.parse import quote_plus
 
 import pandas as pd
-import plotly.express as px
 import streamlit as st
 
 try:
@@ -1708,14 +1707,23 @@ def admin_view():
         interest_columns = st.columns(2)
         with interest_columns[0]:
             st.markdown("**Customer interest by farmer**")
-            interest_pie = px.pie(
+            st.vega_lite_chart(
                 interest_data,
-                names="Farmer",
-                values="Orders",
-                hole=0.35,
-                title="Order share",
+                {
+                    "mark": {"type": "arc", "innerRadius": 45},
+                    "encoding": {
+                        "theta": {"field": "Orders", "type": "quantitative"},
+                        "color": {"field": "Farmer", "type": "nominal"},
+                        "tooltip": [
+                            {"field": "Farmer", "type": "nominal"},
+                            {"field": "Orders", "type": "quantitative"},
+                            {"field": "Revenue", "type": "quantitative"},
+                        ],
+                    },
+                    "title": "Customer order share by farmer",
+                },
+                use_container_width=True,
             )
-            st.plotly_chart(interest_pie, use_container_width=True)
         with interest_columns[1]:
             st.markdown("**Farmer revenue comparison**")
             st.bar_chart(interest_data.set_index("Farmer"), y="Revenue", color="#ef6c00")
