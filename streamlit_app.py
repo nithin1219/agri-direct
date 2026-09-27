@@ -691,8 +691,13 @@ def registration_view():
                 st.session_state.users[account["email"]] = account
                 save_cloud_snapshot()
                 st.session_state.pop("show_create_account", None)
-                st.session_state.pending_face_login = account["email"]
-                st.success("Account created. Allow camera access to enroll or verify your face before entering AgriDirect.")
+                if account_role in {"Farmer", "Admin"}:
+                    st.session_state.pending_face_login = account["email"]
+                    st.success("Account created. Allow camera access to enroll or verify your face before entering AgriDirect.")
+                else:
+                    st.session_state.authenticated_user = account["email"]
+                    st.session_state.role = account["role"]
+                    st.success("Customer account created. You are now signed in.")
                 st.rerun()
     if st.button("Back to sign in", key="back-to-signin"):
         st.session_state.pop("show_create_account", None)
@@ -839,7 +844,11 @@ def authentication_view():
         if submitted:
             user = find_account(email)
             if user and password_matches(password, user["password"]):
-                st.session_state.pending_face_login = user["email"]
+                if user["role"] in {"Farmer", "Admin"}:
+                    st.session_state.pending_face_login = user["email"]
+                else:
+                    st.session_state.authenticated_user = user["email"]
+                    st.session_state.role = user["role"]
                 st.rerun()
             else:
                 st.error("Invalid email or password.")
@@ -903,8 +912,13 @@ def authentication_view():
                 else:
                     st.session_state.users[account["email"]] = account
                     save_cloud_snapshot()
-                    st.session_state.pending_face_login = account["email"]
-                    st.success("Account created. Allow camera access to enroll or verify your face before entering AgriDirect.")
+                    if account_role in {"Farmer", "Admin"}:
+                        st.session_state.pending_face_login = account["email"]
+                        st.success("Account created. Allow camera access to enroll or verify your face before entering AgriDirect.")
+                    else:
+                        st.session_state.authenticated_user = account["email"]
+                        st.session_state.role = account["role"]
+                        st.success("Customer account created. You are now signed in.")
                     st.rerun()
 
 
