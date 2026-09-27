@@ -95,9 +95,6 @@ def initialize_database():
             """
         )
         columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)").fetchall()}
-        if "frs_enabled" not in columns:
-            connection.execute("ALTER TABLE users ADD COLUMN frs_enabled INTEGER NOT NULL DEFAULT 0")
-            connection.execute("UPDATE users SET frs_enabled = 1 WHERE role IN ('Farmer', 'Admin')")
         if "last_face_capture" not in columns:
             connection.execute("ALTER TABLE users ADD COLUMN last_face_capture BLOB")
         connection.execute(
@@ -135,7 +132,6 @@ def load_database_users():
             "face_encoding": encoding,
             "last_face_verification": row["last_face_verification"],
             "last_face_capture": row["last_face_capture"],
-            "frs_enabled": bool(row["frs_enabled"]),
         }
     return users
 
@@ -147,8 +143,8 @@ def save_database_user(user):
             connection.execute(
             """
             INSERT INTO users
-                (email, username, role, password_hash, frs_photo, frs_photo_name, face_encoding, last_face_verification, last_face_capture, frs_enabled)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (email, username, role, password_hash, frs_photo, frs_photo_name, face_encoding, last_face_verification, last_face_capture)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(email) DO UPDATE SET
                 username=excluded.username,
                 role=excluded.role,
@@ -157,8 +153,7 @@ def save_database_user(user):
                 frs_photo_name=excluded.frs_photo_name,
                 face_encoding=excluded.face_encoding,
                 last_face_verification=excluded.last_face_verification,
-                last_face_capture=excluded.last_face_capture,
-                frs_enabled=excluded.frs_enabled
+                last_face_capture=excluded.last_face_capture
             """,
                 (
                     user["email"],
@@ -170,7 +165,6 @@ def save_database_user(user):
                     json.dumps(user.get("face_encoding")) if user.get("face_encoding") else None,
                     user.get("last_face_verification"),
                     user.get("last_face_capture"),
-                    int(user.get("frs_enabled", user["role"] in {"Farmer", "Admin"})),
                 ),
             )
             connection.commit()
@@ -342,6 +336,63 @@ def load_cloud_snapshot():
         return None
 
 
+def normalize_product(product):
+    """Fill fields absent from older persisted marketplace snapshots."""
+    normalized = dict(product)
+    defaults = {
+        "id": 0,
+        "name": "Unavailable product",
+        "category": "Other",
+        "price": 0,
+        "unit": "unit",
+        "stock": 0,
+        "farmer": "Unknown farmer",
+        "farmer_id": None,
+        "farmer_location": "Location not provided",
+        "farmer_lat": None,
+        "farmer_lon": None,
+        "crop_details": normalized.get("description", ""),
+        "organic": False,
+        "description": "",
+        "emoji": "🌱",
+        "image_url": "",
+    }
+    for key, value in defaults.items():
+        if normalized.get(key) is None:
+            normalized[key] = value
+    if not normalized["name"]:
+        normalized["name"] = "Unavailable product"
+    if not normalized["category"]:
+        normalized["category"] = "Other"
+    try:
+        normalized["price"] = float(normalized["price"])
+        normalized["stock"] = max(0, int(normalized["stock"]))
+    except (TypeError, ValueError):
+        normalized["price"] = 0
+        normalized["stock"] = 0
+    if not math.isfinite(normalized["price"]) or normalized["price"] <= 0 or not normalized["farmer_id"]:
+        normalized["stock"] = 0
+    normalized["image_bytes"] = _decode_bytes(normalized.get("image_bytes"))
+    return normalized
+
+
+def normalize_order(order, index):
+    """Fill display fields absent from older persisted order snapshots."""
+    normalized = dict(order)
+    normalized.setdefault("id", 1001 + index)
+    normalized.setdefault("created", normalized.get("created_iso", "Date not recorded"))
+    normalized.setdefault("address", "Address not recorded")
+    normalized.setdefault("status", "Placed")
+    normalized.setdefault("payment", "Cash on Delivery")
+    try:
+        normalized["total"] = float(normalized.get("total", 0))
+    except (TypeError, ValueError):
+        normalized["total"] = 0
+    items = normalized.get("items", [])
+    normalized["items"] = [item for item in items if isinstance(item, dict)] if isinstance(items, list) else []
+    return normalized
+
+
 def face_encoding(image_bytes):
     if face_recognition is None:
         return None
@@ -457,25 +508,28 @@ def sync_cloud_snapshot():
     if not snapshot:
         return False
     if snapshot.get("products") is not None:
-        st.session_state.products = snapshot["products"]
-        for product in st.session_state.products:
-            product["image_bytes"] = _decode_bytes(product.get("image_bytes"))
-            product.setdefault("farmer_location", "Location not provided")
-            product.setdefault("crop_details", product.get("description", ""))
+        st.session_state.products = [
+            normalize_product(product)
+            for product in snapshot["products"]
+            if isinstance(product, dict)
+        ]
     if snapshot.get("users") is not None:
         current_email = st.session_state.get("authenticated_user")
         st.session_state.users = merge_persistent_users(dict(snapshot["users"]))
         for user in st.session_state.users.values():
             user["frs_photo"] = _decode_bytes(user.get("frs_photo"))
             user["last_face_capture"] = _decode_bytes(user.get("last_face_capture"))
-            user.setdefault("frs_enabled", user.get("role") in {"Farmer", "Admin"})
         st.session_state.users = enforce_single_admin(
             st.session_state.users, configured_admin_account()
         )
         if current_email and current_email not in st.session_state.users:
             st.session_state.authenticated_user = None
     if snapshot.get("orders") is not None:
-        st.session_state.orders = snapshot["orders"]
+        st.session_state.orders = [
+            normalize_order(order, index)
+            for index, order in enumerate(snapshot["orders"])
+            if isinstance(order, dict)
+        ]
     st.session_state.next_product_id = max(
         (product.get("id", 0) for product in st.session_state.products), default=0
     ) + 1
@@ -500,12 +554,18 @@ def seed_state():
         st.session_state.products = (
             snapshot["products"] if snapshot and "products" in snapshot else seeded_products
         )
-        for product in st.session_state.products:
-            product["image_bytes"] = _decode_bytes(product.get("image_bytes"))
-            product.setdefault("farmer_location", "Location not provided")
-            product.setdefault("crop_details", product.get("description", ""))
+        st.session_state.products = [
+            normalize_product(product)
+            for product in st.session_state.products
+            if isinstance(product, dict)
+        ]
     st.session_state.setdefault("cart", {})
     st.session_state.setdefault("orders", (snapshot or {}).get("orders", []))
+    st.session_state.orders = [
+        normalize_order(order, index)
+        for index, order in enumerate(st.session_state.orders)
+        if isinstance(order, dict)
+    ]
     st.session_state.setdefault(
         "next_product_id",
         max((product.get("id", 0) for product in st.session_state.products), default=6) + 1,
@@ -521,7 +581,6 @@ def seed_state():
                 "role": role,
                 "username": username,
                 "password": password_hash(password),
-                "frs_enabled": role in {"Farmer", "Admin"},
             }
             for email, (role, password, username) in DEMO_ACCOUNTS.items()
         })
@@ -543,7 +602,6 @@ def seed_state():
             "username": admin["username"],
             "role": "Admin",
             "password": password_hash(admin["password"]),
-            "frs_enabled": True,
         }
         st.session_state.users[admin["email"]] = account
         save_database_user(account)
@@ -626,7 +684,6 @@ def registration_view():
                 "frs_photo": farmer_photo.getvalue() if farmer_photo else None,
                 "frs_photo_name": farmer_photo.name if farmer_photo else None,
                 "face_encoding": enrolled_encoding,
-                "frs_enabled": account_role == "Farmer",
             }
             if not save_database_user(account):
                 st.error("Your account could not be saved. Check the database location and try again.")
@@ -839,7 +896,6 @@ def authentication_view():
                     "frs_photo": farmer_photo.getvalue() if farmer_photo else None,
                     "frs_photo_name": farmer_photo.name if farmer_photo else None,
                     "face_encoding": enrolled_encoding,
-                    "frs_enabled": account_role == "Farmer",
                 }
                 if not save_database_user(account):
                     st.error("Your account could not be saved. Check the database location and try again.")
@@ -991,43 +1047,6 @@ def current_role():
 
 def current_user():
     return st.session_state.users[st.session_state.authenticated_user]
-
-
-def daily_farmer_verification():
-    user = current_user()
-    if user["role"] not in {"Farmer", "Admin"} or not user.get("frs_enabled", True):
-        return True
-    if user.get("last_face_verification") == date.today().isoformat():
-        return True
-    st.subheader(f"Daily {user['role'].lower()} FRS verification")
-    if face_recognition is None:
-        st.info("Live camera access is active. Native face matching is unavailable, so secure login plus today's camera capture is used.")
-        camera_capture = st.camera_input("Allow camera access and capture your face to continue")
-        if not camera_capture:
-            st.warning("Camera access is required for today's FRS verification.")
-            return False
-        user["last_face_verification"] = date.today().isoformat()
-        user["last_face_capture"] = camera_capture.getvalue()
-        save_database_user(user)
-        save_cloud_snapshot()
-        st.success("Daily FRS camera verification complete.")
-        return True
-    if not user.get("face_encoding"):
-        st.error("Native face verification is enabled, but this farmer has no enrolled face profile. Ask an administrator to reset enrollment.")
-        return False
-    photo = st.camera_input("Allow camera access and capture your face to continue")
-    if not photo:
-        st.warning("Camera access is required for today's farmer dashboard verification.")
-        return False
-    if verify_face(photo.getvalue(), user["face_encoding"]):
-        user["last_face_verification"] = date.today().isoformat()
-        user["last_face_capture"] = photo.getvalue()
-        save_database_user(user)
-        save_cloud_snapshot()
-        st.success("Daily verification complete.")
-        return True
-    st.error("Face verification failed. Try again with good lighting and one face in the frame.")
-    return False
 
 
 def add_to_cart(product_id, quantity=1):
@@ -1764,7 +1783,6 @@ def admin_view():
             "Email": user["email"],
             "FRS photo": "Saved" if user.get("frs_photo") else "Missing",
             "Face matching": "Enabled" if user.get("face_encoding") else "Unavailable",
-            "FRS status": "Active" if user.get("frs_enabled", True) else "Disabled",
             "Listings": len(listings),
             "Farm locations": " | ".join(locations) if locations else "No listing yet",
             "Crop details": " | ".join(crops) if crops else "No crop details yet",
@@ -1781,8 +1799,7 @@ def admin_view():
                 "Email": user["email"],
                 "Profile photo": "Saved" if user.get("frs_photo") else "Missing",
                 "Face matching": "Enabled" if user.get("face_encoding") else "Optional/unavailable",
-                "FRS": "Active" if user.get("frs_enabled", True) else "Disabled",
-                "Last daily verification": user.get("last_face_verification") or "Not verified today",
+                "Last face verification": user.get("last_face_verification") or "Not recorded",
                 "Latest capture": "Saved" if user.get("last_face_capture") else "Not captured",
             }
             for user in farmer_users
@@ -1812,25 +1829,6 @@ def admin_view():
                 st.success(f"FRS camera verification completed for @{selected_profile['username']}.")
             else:
                 st.error("FRS camera verification failed. Use one clear face and good lighting.")
-        if st.button("Require verification again today", key="admin-reset-farmer-verification"):
-            farmer = st.session_state.users[selected_farmer]
-            farmer["last_face_verification"] = None
-            save_database_user(farmer)
-            save_cloud_snapshot()
-            st.success(f"Daily verification reset for @{farmer['username']}.")
-            st.rerun()
-        frs_enabled = selected_profile.get("frs_enabled", True)
-        if st.button(
-            "Disable FRS for this farmer" if frs_enabled else "Activate FRS for this farmer",
-            key="admin-toggle-farmer-frs",
-        ):
-            selected_profile["frs_enabled"] = not frs_enabled
-            save_database_user(selected_profile)
-            save_cloud_snapshot()
-            st.success(
-                f"FRS {'activated' if selected_profile['frs_enabled'] else 'disabled'} for @{selected_profile['username']}."
-            )
-            st.rerun()
     else:
         st.info("No farmer accounts have been registered yet.")
     st.subheader("Live farmer location map")
@@ -1941,8 +1939,6 @@ def main():
     role = user["role"]
     st.sidebar.success(f"Signed in as @{user['username']}")
     ai_voice_mode(role)
-    if not daily_farmer_verification():
-        return
     if role == "Farmer":
         st.session_state.user_email = user["email"]
     else:

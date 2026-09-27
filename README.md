@@ -77,11 +77,10 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Forgot-password flow that replaces the saved PBKDF2 password hash for an existing local account
 - Farmer FRS profile photo enrollment and farmer-only profile details
 - Every account uses password plus face verification: first successful password login enrolls and saves a camera face, and later logins require a face match
-- Daily farmer verification with camera access when optional face matching is available
-- Successful FRS camera captures are saved in the local database as the latest verification capture; the enrolled profile photo remains unchanged
-- Admin-only farmer FRS verification status and reset controls
+- Face verification is required at sign-in only; Farmer and Admin dashboards do not require an additional daily camera check
+- Successful sign-in and optional admin FRS camera captures are saved in the local database as the latest verification capture; the enrolled profile photo remains unchanged
+- Admin-only farmer FRS verification status
 - Admin FRS camera capture and verification for a selected farmer
-- FRS activation controls for farmers and the administrator, with daily camera access
 - Admin account review, product moderation/removal, and order-status controls
 - Product browsing, search, category and organic filters
 - Newly published farmer listings become visible to every customer marketplace view automatically every second; SQLite persistence works locally and optional S3 snapshots synchronize separate replicas
@@ -113,7 +112,7 @@ The app seeds these accounts for local testing:
 | Farmer | `sunrise` or `orchard@agridirect.local` | `orchard123` |
 | Admin | `admin` or `admin@agridirect.local` | `admin123` |
 
-The seeded administrator can review farmer FRS profile-photo status, face-matching availability, and the last daily verification date, then require a farmer to verify again.
+The seeded administrator can review farmer FRS profile-photo status, face-matching availability, and the latest face verification date, and can optionally capture a farmer's face for manual verification. Farmers and administrators are not prompted for a second daily camera check.
 
 New customer and farmer accounts can be registered from the sign-in screen. Signed-in farmers can publish listings with price, stock, description, and image URL; those images appear in the customer product cards. Customer orders are scoped to the signed-in account, while farmer listings are scoped to the signed-in farmer.
 
@@ -133,7 +132,7 @@ Customers can cancel an order while it is Placed, Confirmed, or Preparing. Cance
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
 
-Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. New accounts are not signed in until they complete the camera enrollment/verification step after registration. Every account must pass password and camera face verification: on its first password-verified sign-in, a clear camera capture is enrolled and saved in SQLite; on subsequent sign-ins, the captured face must match the stored encoding or login is rejected. Successful verification saves the capture and date. Login stays blocked if face matching is unavailable; there is no password-only fallback. Strict face matching is enabled when `face-recognition` is installed. On Windows, install the verified prebuilt runtime without a Visual C++ build by running:
+Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. New accounts are not signed in until they complete the camera enrollment/verification step after registration. Every account must pass password and camera face verification: on its first password-verified sign-in, a clear camera capture is enrolled and saved in SQLite; on subsequent sign-ins, the captured face must match the stored encoding or login is rejected. Successful verification saves the latest capture and date. Farmer and admin dashboards do not require a separate daily camera check. Login stays blocked if face matching is unavailable; there is no password-only fallback. Strict face matching is enabled when `face-recognition` is installed. On Windows, install the verified prebuilt runtime without a Visual C++ build by running:
 
 ```powershell
 python -m pip install "setuptools<81" dlib-bin==20.0.1 face-recognition-models==0.3.0
