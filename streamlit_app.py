@@ -805,6 +805,7 @@ def authentication_view():
                 st.session_state.pop("pending_face_login", None)
                 st.rerun()
             return
+        camera_permission_guidance()
         face_capture = st.camera_input(
             "Capture your face to enroll" if enrolling_face else "Capture the enrolled account face",
             help="Allow browser camera permission and position one face clearly in the frame.",
@@ -1047,6 +1048,13 @@ def current_role():
 
 def current_user():
     return st.session_state.users[st.session_state.authenticated_user]
+
+
+def camera_permission_guidance():
+    st.caption(
+        "Allow camera access when your browser prompts. Camera capture requires HTTPS or localhost; "
+        "plain-HTTP LAN links may be blocked by browser security."
+    )
 
 
 def add_to_cart(product_id, quantity=1):
@@ -1811,6 +1819,7 @@ def admin_view():
             key="admin-farmer-account",
         )
         selected_profile = st.session_state.users[selected_farmer]
+        camera_permission_guidance()
         admin_camera_photo = st.camera_input(
             "Admin FRS camera access: capture the selected farmer",
             help="Camera access is used only for this verification attempt.",
