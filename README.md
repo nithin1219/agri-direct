@@ -56,7 +56,9 @@ The app stores registered email/login IDs, usernames, roles, and salted PBKDF2-H
 1. Push this repository to GitHub.
 2. In [Streamlit Community Cloud](https://share.streamlit.io/), select the repository and the `main` branch.
 3. Set **Main file path** to `streamlit_app.py`.
-4. Deploy. Community Cloud installs the root `requirements.txt` automatically.
+4. Deploy. Community Cloud installs the root `requirements.txt` and system packages in `packages.txt`; the latter supplies the compiler, CMake, and BLAS/LAPACK libraries needed to build the Linux face-matching runtime.
+
+If Farmer/Admin sign-in reports that face matching is unavailable after deployment, confirm that the deployed branch includes both dependency files, then use **Manage app → Reboot** after the package installation finishes. Do not bypass face verification: Farmer/Admin sign-in remains blocked until the face-matching runtime is available.
 
 The public Community Cloud address remains the deployment URL assigned by Streamlit; the local IP address is only for a computer running Streamlit itself.
 
@@ -143,7 +145,7 @@ On Linux, install the platform's C++ build tools, CMake, and Python headers befo
 
 ### Voice and face features
 
-Face-matching dependencies are platform-specific in the root `requirements.txt`: Linux installs `face-recognition` and builds `dlib` (CMake, a C++ compiler, and Python development headers are required); Windows installs the prebuilt `dlib-bin`, then uses the `face-recognition --no-deps` command above. `st.audio_input` is used when provided by the installed Streamlit version. To transcribe recorded WAV audio, optionally install `SpeechRecognition` and provide the audio service it uses; otherwise use the transcript/text box. The listing assistant is a reviewable, lightweight field-prefill foundation, not a guarantee of translation or medical/agronomic advice.
+Face-matching dependencies are platform-specific in the root `requirements.txt`: Linux installs `face-recognition` and builds `dlib`; Streamlit Community Cloud installs the required compiler, CMake, and BLAS/LAPACK libraries from `packages.txt`. Other Linux hosts need equivalent system packages and Python development headers. Windows installs the prebuilt `dlib-bin`, then uses the `face-recognition --no-deps` command above. `st.audio_input` is used when provided by the installed Streamlit version. To transcribe recorded WAV audio, optionally install `SpeechRecognition` and provide the audio service it uses; otherwise use the transcript/text box. The listing assistant is a reviewable, lightweight field-prefill foundation, not a guarantee of translation or medical/agronomic advice.
 
 When `AGRI_S3_BUCKET` and AWS credentials are configured, the app restores users, hashed passwords, product listings, uploaded image bytes, orders, and verification dates from `agridirect/state.json`, then snapshots changes back to the same bucket. Do not store production credentials in source control; configure them as Streamlit secrets or deployment environment variables.
 
