@@ -477,13 +477,13 @@ def durable_storage_setup_message():
         return (
             f"Durable storage check failed: {error} "
             "In Streamlit app settings, verify SUPABASE_URL and "
-            "SUPABASE_SERVICE_ROLE_KEY. No SQL setup is required."
+            "SUPABASE_SERVICE_ROLE_KEY."
         )
     return (
         "Hosted signup is paused because durable storage is not configured. "
         "In Streamlit app settings → Secrets, add SUPABASE_URL and "
         "SUPABASE_SERVICE_ROLE_KEY (a private server-side key, not a publishable key). "
-        "The app creates its private Supabase Storage bucket automatically; no SQL setup is required."
+        "The app creates its private Supabase Storage bucket automatically."
     )
 
 
