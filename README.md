@@ -1,6 +1,6 @@
 # AgriDirect
 
-AgriDirect is a self-contained Streamlit marketplace that connects farmers directly with customers. The Streamlit app is the supported runtime; it needs no Flask server, JavaScript build, database server, or environment variables.
+AgriDirect is a Streamlit marketplace for real farmer listings and customer orders. The Streamlit app is the supported runtime; it needs no Flask server or JavaScript build. It does not create demo accounts, pretend products, or sample orders. A production deployment must configure an administrator, verified-email delivery, and durable storage before account registration and marketplace changes are enabled.
 
 ## Run locally
 
@@ -26,30 +26,34 @@ ipconfig
 # Use the IPv4 Address, for example 192.168.1.25
 ```
 
-Then open `http://<host-ip>:8501` from each phone, laptop, or desktop on the same Wi-Fi/LAN. For the current host network, the link is `http://172.20.10.2:8501`. Every device uses the same link, but each browser gets its own Streamlit session and login. If Windows Firewall asks, allow Python/Streamlit on the **Private networks** profile. Do not expose this development server directly to the public internet; use Streamlit Community Cloud or a properly secured reverse proxy for public access.
+Then open `http://<host-ip>:8501` from each phone, laptop, or desktop on the same Wi-Fi/LAN, replacing `<host-ip>` with the host computer's current private IPv4 address. Every device uses the same link, but each browser gets its own Streamlit session and login. If Windows Firewall asks, allow Python/Streamlit on the **Private networks** profile. Do not expose this development server directly to the public internet; use Streamlit Community Cloud or a properly secured reverse proxy for public access.
 
-The single seeded administrator account is:
+### Required production configuration
 
-| Login | Password |
-| --- | --- |
-| `admin` or `admin@agridirect.local` | `admin123` |
-
-Use that account from any device after opening the shared LAN link to manage users, FRS controls, products, and orders. Change this demo password before using the app for real users.
-
-### Production admin account
-
-For a real administrator, configure secrets on the deployed app; do not commit the password:
+In Streamlit Community Cloud, open **App settings → Secrets** and configure a unique administrator account and the external services below. Never commit credentials:
 
 ```toml
+AGRI_S3_BUCKET = "your-private-agridirect-state-bucket"
+AWS_REGION = "ap-south-1"
+AWS_ACCESS_KEY_ID = "least-privilege-access-key"
+AWS_SECRET_ACCESS_KEY = "least-privilege-secret-key"
+
 [admin]
 email = "admin@your-domain.com"
 username = "your-admin-username"
-password = "use-a-long-unique-password"
+password = "replace-with-a-unique-password-of-at-least-12-characters"
+
+[email]
+host = "smtp.your-provider.example"
+port = 587
+username = "smtp-account"
+password = "smtp-app-password"
+from_address = "AgriDirect <noreply@your-domain.com>"
 ```
 
-The equivalent environment variables are `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD`. Set `ADMIN_EMAIL` to the email address used by the Streamlit app owner. On the next app start, that account is created or updated as the **only** `Admin` account, its password is stored as a PBKDF2 hash in SQLite, and it can sign in from the local LAN link or the public deployment. Any older or duplicate Admin accounts are removed; Customer and Farmer accounts are not affected. The demo admin remains the single local fallback only when production admin secrets are not configured.
+Admin settings may alternatively be provided through the `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD` environment variables. The configured account becomes the only Admin; its password is stored as a PBKDF2 hash. There is deliberately no built-in or fallback admin password.
 
-The app stores registered email/login IDs, usernames, roles, and salted PBKDF2-HMAC-SHA256 password hashes (120,000 iterations) in the `users` table in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`). Plaintext passwords are never stored; login checks compare the submitted password against its saved hash. This means a new account is available to later Streamlit sessions on the same deployment, and a saved account cannot be registered again. The same hashed account data is included in the optional S3 snapshot. Configure `AGRI_S3_BUCKET` plus AWS credentials for best-effort shared snapshots across multiple app replicas/devices; without shared storage, all replicas must use the same SQLite file. Cart contents remain browser-session scoped.
+Customer and Farmer registration requires a working SMTP account: a one-time email code is required before an account is created. Password recovery also requires a one-time email code; Admin passwords are changed only through deployment secrets. The app stores salted PBKDF2-HMAC-SHA256 password hashes (never plaintext) in SQLite and synchronizes marketplace state to the configured private S3 bucket using server-side encryption. Conditional ETag writes reject stale concurrent updates rather than silently overwriting another session's orders or inventory. On Streamlit Cloud, the app refuses to report hosted data changes as saved when S3 storage is not configured or a write conflicts/fails. Give the AWS identity only the bucket/object permissions this app needs. Do not use a public bucket for account records, addresses, or face data.
 
 ## Deploy on Streamlit Community Cloud
 
@@ -60,13 +64,13 @@ The app stores registered email/login IDs, usernames, roles, and salted PBKDF2-H
 
 If Farmer/Admin sign-in reports that face matching is unavailable after deployment, confirm that the deployed branch includes both dependency files, then use **Manage app → Reboot** after the package installation finishes. Do not bypass face verification: Farmer/Admin sign-in remains blocked until the face-matching runtime is available.
 
-The public Community Cloud address remains the deployment URL assigned by Streamlit; the local IP address is only for a computer running Streamlit itself.
+The public Community Cloud address is `https://agri-direct-nithin-dairy.streamlit.app/`. In **App settings**, set viewer access to the intended audience. A healthy `/healthz` endpoint does not verify app access or deployment success; check the app page and Streamlit Cloud logs after each deployment.
 
 ### Always-on access
 
 Use the deployed Community Cloud address for access from any device at any time:
 
-`https://agri-direct-nithin-1.streamlit.app/`
+`https://agri-direct-nithin-dairy.streamlit.app/`
 
 `localhost` and private IP links are not public hosting. They work only while the host computer is powered on, connected to the network, and running Streamlit; they cannot provide guaranteed 24/7 access after the computer sleeps, shuts down, loses its network connection, or closes the Streamlit process. For a permanent custom domain or guaranteed uptime, deploy the same app on an always-on server or managed hosting service.
 
@@ -74,67 +78,53 @@ Use the deployed Community Cloud address for access from any device at any time:
 
 - Customer, farmer, and admin workspace selection
 - Farmer Registration System (FRS) with username login, farmer registration, hashed passwords, and sign-out
-- Registered email addresses, usernames, roles, and hashed passwords are stored in SQLite for later logins
-- Immediate account creation after valid registration details
-- Forgot-password flow that replaces the saved PBKDF2 password hash for an existing local account
+- Registered email addresses must pass a one-time SMTP email code before the account is created
+- Password recovery requires a one-time email code and durable storage; Admin passwords are managed through deployment secrets
 - Farmer FRS profile photo enrollment and farmer-only profile details
 - Farmer and Admin accounts use password plus face verification: first successful password login enrolls and saves a camera face, and later logins require a face match; Customers sign in with their password only and do not enroll or store face data
 - Face verification is required at sign-in only; Farmer and Admin dashboards do not require an additional daily camera check
-- Successful sign-in and optional admin FRS camera captures are saved in the local database as the latest verification capture; the enrolled profile photo remains unchanged
+- Successful face enrollment and verification captures are saved with the shared account state; the enrolled profile photo remains unchanged
 - Admin-only farmer FRS verification status
 - Admin FRS camera capture and verification for a selected farmer
-- Admin account review, product moderation/removal, and order-status controls
+- Admin account review, product moderation/removal, delivery-status, and COD collection controls
 - Product browsing, search, category and organic filters
-- Newly published farmer listings become visible to every customer marketplace view automatically every second; SQLite persistence works locally and optional S3 snapshots synchronize separate replicas
+- Newly published farmer listings refresh in customer views automatically; hosted changes require successful writes to the configured private S3 snapshot
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
-- Working add-to-cart buttons with immediate cart-badge refresh, visible cart item summary, quantity management, address checkout, Cash on Delivery confirmation, transaction reference, immediate cancellation for Placed/Confirmed/Preparing orders, and order history
+- Working add-to-cart buttons with immediate cart-badge refresh, visible cart item summary, quantity management, address checkout, Cash on Delivery orders, a non-payment order reference, immediate cancellation for Placed/Confirmed/Preparing orders, and order history
 - Welcome message at sign-in and thank-you confirmation after completed purchases
 - Customer order history and fulfillment status
 - Live order notifications refresh every five seconds in Admin and Farmer dashboards; each farmer receives only the items belonging to their listings, with customer, quantity, delivery, payment, and status details
-- Complete order records are saved to the SQLite marketplace database before checkout is confirmed and are shown with item-level farmer, quantity, and price details in Customer, Farmer, and Admin dashboards
+- Complete order records are saved to durable hosted storage before checkout is confirmed and are shown with item-level farmer, quantity, and price details in Customer, Farmer, and Admin dashboards
 - Farmer product creation and inventory view
 - Farmer listings include farm location, optional coordinates, crop details, and nearby-farm visibility for customers
 - Checkout captures the selected farmer/listing, location, distance, ETA estimate, and no-key Google Maps/OpenStreetMap route links
-- Admin inventory, daily income, transaction summary, full order history, and order-status dashboard
-- Seeded sample data with persistent SQLite storage and an administrator reset action
+- Admin inventory, gross order-value summaries (distinct from collected money), manually recorded COD collection, full order history, and fulfillment-status dashboard
+- Persistent listings, account, and order state backed by a private S3 snapshot in hosted deployments
 - Multilingual crop/listing assistant (English, Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, and Marathi) with microphone transcription when optional support is installed and a text fallback
 - Top-level AI Voice Mode button with step-by-step microphone, language, transcription, and review instructions
 - AI voice assistance button on the login page for multilingual sign-in and registration guidance
 - AI account assistant can fill spoken/transcribed email, username, and account type on login/registration; passwords always remain manual
 - Farm-and-plants visual theme on the public home screen
 
-### Demo sign-in accounts
+New Customer and Farmer accounts are created only after SMTP email verification and a successful write to durable storage. There are no built-in test accounts or listings. Farmers publish their own real inventory; customer order history is scoped to the signed-in verified account.
 
-The app seeds these accounts for local testing:
-
-| Role | Email | Password |
-| --- | --- | --- |
-| Customer | `customer` or `customer@agridirect.local` | `customer123` |
-| Farmer | `greenvalley` or `farmer@agridirect.local` | `farmer123` |
-| Farmer | `sunrise` or `orchard@agridirect.local` | `orchard123` |
-| Admin | `admin` or `admin@agridirect.local` | `admin123` |
-
-The seeded administrator can review farmer FRS profile-photo status, face-matching availability, and the latest face verification date, and can optionally capture a farmer's face for manual verification. Farmers and administrators are not prompted for a second daily camera check.
-
-New customer and farmer accounts can be registered from the sign-in screen. Signed-in farmers can publish listings with price, stock, description, and image URL; those images appear in the customer product cards. Customer orders are scoped to the signed-in account, while farmer listings are scoped to the signed-in farmer.
-
-Farmer listings are saved to the persistent SQLite marketplace snapshot (and optional S3 snapshot) when published. The app confirms the SQLite write before showing success; if the database write fails, the listing is rolled back and an error is shown. Listings remain available after sign-out, restart, and new customer registration, and are refreshed into both customer and farmer dashboards. Uploaded image bytes, accounts, password changes, orders, cancellations, inventory, and order-status changes use the same persisted snapshot.
+Farmer listings and uploaded images are stored in the configured private S3 snapshot. If hosted durable storage is unavailable, the app does not confirm new account, listing, or order writes as successful.
 
 Farmers can add a farm/town location, optional latitude/longitude, and crop details to each listing. Customers see those details in the marketplace and select a listing as the purchase context at checkout. If both the farmer and customer provide coordinates, distance is calculated locally with the Haversine formula; otherwise customers can enter an approximate distance or continue without geolocation. ETA is clearly labeled as an estimate using a 20–30 minute baseline plus a small distance adjustment. Route links use Google Maps and OpenStreetMap directly and do not require API keys.
 
-Orders, including farmer/location/distance/ETA metadata, are included in the existing SQLite snapshot and optional S3 snapshot. Administrators can review daily income, transaction status totals, and the complete order history from the dashboard.
+Orders, including farmer/location/distance/ETA metadata, are included in the shared S3 snapshot. Distances and delivery-time values are estimates, not carrier dispatch or guaranteed delivery schedules.
 
-Checkout uses Cash on Delivery only. Every completed purchase receives an order number and transaction reference, clears the cart, reduces stock, and appears in customer order history and the Admin transaction reports. No simulated online payment is presented or marked as successful.
+Checkout uses Cash on Delivery only. Each accepted order receives an order number and non-payment order reference, clears the cart, reserves stock, and appears in customer order history and Admin order reports. The reference is not a payment transaction, and the app does not claim to process or collect money. The farmer/operator must arrange actual delivery and confirm collection outside the app.
 
-Order placement is confirmed only after the complete order and updated inventory are saved to SQLite; if the write fails, inventory and cart contents are restored and checkout reports an error. Each order preserves the customer, all ordered items, item-level farmer ownership, quantities and amounts, address, payment method, ETA, and status for customer history, per-farmer notifications, and Admin reports.
+Order placement is confirmed only after the complete order and updated inventory are saved to durable hosted storage; if the write fails, inventory and cart contents are restored and checkout reports an error. Each order preserves the customer, all ordered items, item-level farmer ownership, quantities and amounts, address, payment method, ETA, and status for customer history, per-farmer notifications, and Admin reports.
 
-If a user forgets a password, select **Forgot password?** on the sign-in page, enter the registered email or username, and save a new password of at least eight characters. This is a local-deployment recovery flow; use the deployment's normal access controls and persistent storage.
+If a user forgets a password, select **Forgot password?** and complete the one-time code sent to the registered email address. SMTP delivery and durable storage must both be working. Admin passwords are changed through protected Streamlit deployment secrets, not the self-service flow.
 
 Customers can cancel an order while it is Placed, Confirmed, or Preparing. Cancellation immediately marks the order as Cancelled, restores the reserved quantities to marketplace stock, records the cancellation time, and shows the confirmation in order history. Orders already Out for delivery or Delivered cannot be cancelled from the customer dashboard.
 
-Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. Registered accounts are stored in `agridirect_users.db` (or the path in `AGRIDIRECT_DATABASE`) with PBKDF2 password hashes, so a user registers once and can sign in later with the same email/username and password. If `AGRI_S3_BUCKET` and AWS credentials are configured, the app also makes best-effort JSON snapshots to `agridirect/state.json`; a missing or unavailable bucket never breaks the site.
+Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. The local SQLite database supports development; hosted deployments require the configured S3 snapshot for durable, shared state.
 
-Farmer registration requires a clear FRS profile photo and shows only the signed-in farmer's profile in the farmer dashboard. New Farmer accounts are not signed in until they complete the camera enrollment/verification step after registration. Farmer and Admin accounts must pass password and camera face verification: on first password-verified sign-in, a clear camera capture is enrolled and saved in SQLite; subsequent sign-ins must match that face or login is rejected. Customers sign in with email/username and password only; they are never asked to enroll or match a face, and any legacy customer face template/capture is cleared from SQLite. Successful Farmer/Admin verification saves the latest capture and date. Farmer and Admin dashboards do not require a separate daily camera check. Farmer and Admin login stays blocked if face matching is unavailable; no password-only fallback is used for those roles. Strict face matching is enabled when `face-recognition` is installed. On Windows, install the verified prebuilt runtime without a Visual C++ build by running:
+Farmer registration requires a verified email and a clear FRS profile photo. Farmer and Admin accounts require password and camera face verification; face templates and verification captures are stored in the account snapshot. Customers use email/password only. Farmer and Admin sign-in remains blocked if face matching or durable storage is unavailable; there is no password-only fallback. On Windows, install the verified prebuilt runtime without a Visual C++ build by running:
 
 ```powershell
 python -m pip install "setuptools<81" dlib-bin==20.0.1 face-recognition-models==0.3.0
@@ -147,7 +137,7 @@ On Linux, install the platform's C++ build tools, CMake, and Python headers befo
 
 Face-matching dependencies are platform-specific in the root `requirements.txt`: Linux installs `face-recognition` and builds `dlib`; Streamlit Community Cloud installs the required compiler, CMake, and BLAS/LAPACK libraries from `packages.txt`. Other Linux hosts need equivalent system packages and Python development headers. Windows installs the prebuilt `dlib-bin`, then uses the `face-recognition --no-deps` command above. `st.audio_input` is used when provided by the installed Streamlit version. To transcribe recorded WAV audio, optionally install `SpeechRecognition` and provide the audio service it uses; otherwise use the transcript/text box. The listing assistant is a reviewable, lightweight field-prefill foundation, not a guarantee of translation or medical/agronomic advice.
 
-When `AGRI_S3_BUCKET` and AWS credentials are configured, the app restores users, hashed passwords, product listings, uploaded image bytes, orders, and verification dates from `agridirect/state.json`, then snapshots changes back to the same bucket. Do not store production credentials in source control; configure them as Streamlit secrets or deployment environment variables.
+When `AGRI_S3_BUCKET` and AWS credentials are configured, the app restores and writes users, hashed passwords, listings, uploaded image bytes, orders, and verification dates at `agridirect/state.json`. Do not store production credentials in source control; configure them as Streamlit secrets or deployment environment variables.
 
 ## Repository notes
 

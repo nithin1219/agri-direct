@@ -1,21 +1,27 @@
-"""AgriDirect: a self-contained Streamlit marketplace demo.
+"""AgriDirect: a self-contained Streamlit marketplace.
 
-All data lives in st.session_state so the app is zero-setup and suitable for
-local demos, classroom use, and quick deployment on Streamlit Community Cloud.
+Streamlit provides the UI; SQLite supports local development and a private S3
+snapshot provides durable shared state for the hosted marketplace.
 """
 
 from datetime import datetime
 from datetime import date
 import base64
 from contextlib import contextmanager
+from email.message import EmailMessage
 import hashlib
+import hmac
 import io
 import json
 import math
 import os
 import re
 import secrets
+import smtplib
+import ssl
 import sqlite3
+import time
+from email.utils import parseaddr
 from urllib.parse import quote_plus
 
 import pandas as pd
@@ -52,12 +58,17 @@ st.set_page_config(
 
 DELIVERY_FEE = 40
 ORDER_STATUSES = ["Placed", "Confirmed", "Preparing", "Out for delivery", "Delivered"]
-DEMO_ACCOUNTS = {
-    "customer@agridirect.local": ("Customer", "customer123", "customer"),
-    "farmer@agridirect.local": ("Farmer", "farmer123", "greenvalley"),
-    "orchard@agridirect.local": ("Farmer", "orchard123", "sunrise"),
-    "admin@agridirect.local": ("Admin", "admin123", "admin"),
+LEGACY_DEMO_EMAILS = {
+    "customer@agridirect.local",
+    "farmer@agridirect.local",
+    "orchard@agridirect.local",
+    "admin@agridirect.local",
 }
+LEGACY_DEMO_FARMER_EMAILS = {
+    "farmer@agridirect.local",
+    "orchard@agridirect.local",
+}
+EMAIL_PATTERN = re.compile(r"^[^@\s\r\n]+@[^@\s\r\n]+\.[^@\s\r\n]+$")
 FARM_BACKGROUND = "https://images.unsplash.com/photo-1500382017468-9049fed747ef?auto=format&fit=crop&w=2200&q=85"
 IMAGE_TYPES = ["jpg", "jpeg", "png", "webp", "gif", "bmp", "tif", "tiff"]
 DATABASE_PATH = os.getenv("AGRIDIRECT_DATABASE", "agridirect_users.db")
@@ -113,6 +124,11 @@ def initialize_database():
                 END
             WHERE role = 'Customer'
             """
+        )
+        demo_emails = tuple(sorted(LEGACY_DEMO_EMAILS))
+        connection.execute(
+            f"DELETE FROM users WHERE email IN ({','.join('?' for _ in demo_emails)})",
+            demo_emails,
         )
         connection.execute(
             """
@@ -208,11 +224,10 @@ def enforce_single_admin(users, configured_admin=None):
     )
     if configured_admin:
         canonical_email = configured_admin["email"]
-    elif "admin@agridirect.local" in users and users["admin@agridirect.local"].get("role") == "Admin":
-        canonical_email = "admin@agridirect.local"
-    elif admin_emails:
-        canonical_email = admin_emails[0]
     else:
+        for email in admin_emails:
+            users.pop(email, None)
+            delete_database_user(email)
         return users
     for email in admin_emails:
         if email != canonical_email:
@@ -235,7 +250,7 @@ def database_account_exists(email, username):
 
 
 def merge_persistent_users(users):
-    """Keep SQLite accounts authoritative across browser sessions and snapshots."""
+    """Use shared snapshots as canonical whenever the app has configured storage."""
     for user in users.values():
         if user.get("role") == "Customer":
             user["face_encoding"] = None
@@ -244,6 +259,8 @@ def merge_persistent_users(users):
             if user.get("frs_photo_name") == "first-login-face-capture":
                 user["frs_photo"] = None
                 user["frs_photo_name"] = None
+    if hosted_streamlit_deployment() or storage_config()[0]:
+        return users
     database_users = load_database_users()
     for email, user in database_users.items():
         users[email] = user
@@ -336,7 +353,12 @@ def configured_admin_account():
             values[key] = st.secrets.get(f"ADMIN_{key.upper()}") or values[key]
     except (FileNotFoundError, KeyError, TypeError):
         pass
-    if not all(values.values()) or len(values["password"]) < 8:
+    if (
+        not all(values.values())
+        or not EMAIL_PATTERN.fullmatch(values["email"].strip())
+        or not values["username"].strip()
+        or len(values["password"]) < 12
+    ):
         return None
     return {
         "email": values["email"].strip().lower(),
@@ -344,6 +366,113 @@ def configured_admin_account():
         "role": "Admin",
         "password": values["password"],
     }
+
+
+def email_transport_config():
+    values = {
+        "host": os.getenv("SMTP_HOST"),
+        "port": os.getenv("SMTP_PORT", "587"),
+        "username": os.getenv("SMTP_USERNAME"),
+        "password": os.getenv("SMTP_PASSWORD"),
+        "from_address": os.getenv("SMTP_FROM"),
+    }
+    try:
+        section = st.secrets.get("email", {})
+        if hasattr(section, "get"):
+            for key in values:
+                values[key] = section.get(key) or values[key]
+    except (FileNotFoundError, KeyError, TypeError):
+        pass
+    if not all(values[key] for key in ("host", "username", "password", "from_address")):
+        return None
+    try:
+        port = int(values["port"])
+    except (TypeError, ValueError):
+        return None
+    sender_email = parseaddr(values["from_address"])[1]
+    if not 1 <= port <= 65535 or not EMAIL_PATTERN.fullmatch(sender_email):
+        return None
+    return {**values, "port": port}
+
+
+def send_security_code(address, subject, purpose):
+    config = email_transport_config()
+    if not config:
+        return None
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    message = EmailMessage()
+    message["From"] = config["from_address"]
+    message["To"] = address
+    message["Subject"] = subject
+    message.set_content(
+        f"Your AgriDirect verification code for {purpose} is {code}.\n\n"
+        "This code expires in 10 minutes. If you did not request it, ignore this message."
+    )
+    try:
+        with smtplib.SMTP(config["host"], config["port"], timeout=15) as server:
+            server.starttls(context=ssl.create_default_context())
+            server.login(config["username"], config["password"])
+            server.send_message(message)
+    except (OSError, smtplib.SMTPException):
+        return None
+    return hashlib.sha256(code.encode("ascii")).hexdigest()
+
+
+def start_verification(email, subject, purpose):
+    code_hash = send_security_code(email, subject, purpose)
+    if not code_hash:
+        return False
+    st.session_state.pending_email_verification = {
+        "email": email,
+        "purpose": purpose,
+        "code_hash": code_hash,
+        "expires_at": time.time() + 600,
+        "attempts": 0,
+    }
+    return True
+
+
+def check_verification(email, purpose, code):
+    pending = st.session_state.get("pending_email_verification")
+    if not pending or pending.get("email") != email or pending.get("purpose") != purpose:
+        return False, "Request a new verification code."
+    if time.time() > pending["expires_at"]:
+        st.session_state.pop("pending_email_verification", None)
+        return False, "The verification code expired. Request a new one."
+    pending["attempts"] += 1
+    if pending["attempts"] > 5:
+        st.session_state.pop("pending_email_verification", None)
+        return False, "Too many incorrect attempts. Request a new code."
+    actual_hash = hashlib.sha256((code or "").strip().encode("ascii", errors="ignore")).hexdigest()
+    if not hmac.compare_digest(actual_hash, pending["code_hash"]):
+        return False, "The verification code is incorrect."
+    st.session_state.pop("pending_email_verification", None)
+    return True, ""
+
+
+def hosted_streamlit_deployment():
+    try:
+        headers = st.context.headers
+        host = (
+            headers.get("x-forwarded-host")
+            or headers.get("host")
+            or ""
+        ).split(":", 1)[0].lower()
+    except (AttributeError, KeyError, TypeError):
+        host = ""
+    return host.endswith(".streamlit.app") or host.endswith(".streamlit.io")
+
+
+def durable_storage_configured():
+    bucket, _, _, _, _ = storage_config()
+    return bool(bucket and boto3 is not None)
+
+
+def load_persistent_snapshot():
+    snapshot = load_cloud_snapshot()
+    if snapshot is not None or hosted_streamlit_deployment() or storage_config()[0]:
+        return snapshot
+    return load_local_snapshot()
 
 
 def _encode_bytes(value):
@@ -357,17 +486,63 @@ def _decode_bytes(value):
         return None
 
 
+def remove_legacy_demo_state(snapshot):
+    if not isinstance(snapshot, dict):
+        return snapshot, False
+    sanitized = dict(snapshot)
+    users = sanitized.get("users", {})
+    products = sanitized.get("products", [])
+    orders = sanitized.get("orders", [])
+    clean_users = {
+        email: user
+        for email, user in users.items()
+        if email not in LEGACY_DEMO_EMAILS
+    } if isinstance(users, dict) else users
+    clean_products = [
+        product for product in products
+        if not isinstance(product, dict)
+        or product.get("farmer_id") not in LEGACY_DEMO_FARMER_EMAILS
+    ] if isinstance(products, list) else products
+    clean_orders = [
+        order for order in orders
+        if not isinstance(order, dict)
+        or (
+            order.get("owner_email") not in LEGACY_DEMO_EMAILS
+            and order.get("farmer_id") not in LEGACY_DEMO_FARMER_EMAILS
+            and not any(
+                isinstance(item, dict)
+                and item.get("farmer_id") in LEGACY_DEMO_FARMER_EMAILS
+                for item in (
+                    order.get("items")
+                    if isinstance(order.get("items"), list)
+                    else []
+                )
+            )
+        )
+    ] if isinstance(orders, list) else orders
+    changed = (
+        clean_users != users
+        or clean_products != products
+        or clean_orders != orders
+    )
+    sanitized.update(users=clean_users, products=clean_products, orders=clean_orders)
+    return sanitized, changed
+
+
 def load_cloud_snapshot():
-    """Restore persisted app state when an optional S3 bucket is configured."""
-    bucket, region = storage_config()
+    """Restore persisted marketplace state when a private S3 bucket is configured."""
+    bucket, region, access_key, secret_key, session_token = storage_config()
     if not bucket or boto3 is None:
+        st.session_state["cloud_snapshot_etag"] = None
         return None
     try:
-        response = boto3.client("s3", region_name=region).get_object(
+        response = storage_client(region, access_key, secret_key, session_token).get_object(
             Bucket=bucket, Key="agridirect/state.json"
         )
+        st.session_state["cloud_snapshot_etag"] = response.get("ETag")
         return json.loads(response["Body"].read().decode("utf-8"))
     except (BotoCoreError, ClientError, OSError, ValueError, KeyError, json.JSONDecodeError):
+        st.session_state["cloud_snapshot_etag"] = None
         return None
 
 
@@ -419,6 +594,9 @@ def normalize_order(order, index):
     normalized.setdefault("address", "Address not recorded")
     normalized.setdefault("status", "Placed")
     normalized.setdefault("payment", "Cash on Delivery")
+    normalized.setdefault(
+        "order_reference", normalized.get("transaction_id", "Reference not available")
+    )
     try:
         normalized["total"] = float(normalized.get("total", 0))
     except (TypeError, ValueError):
@@ -475,19 +653,39 @@ def persist_login_face(user, image_bytes, enroll=False):
         return False, "Face enrollment could not be saved to the account database."
     snapshot_saved = save_cloud_snapshot()
     if not snapshot_saved:
-        return True, "Face verified. The account face is saved in SQLite; shared snapshot storage is unavailable."
+        user.update(previous)
+        save_database_user(user)
+        return False, "Face enrollment could not be saved to durable shared storage. Configure the marketplace S3 bucket before signing in."
     return True, "Face enrolled and saved." if enroll else "Face matched. Sign-in complete."
 
 
 def storage_config():
     bucket = os.getenv("AGRI_S3_BUCKET")
     region = os.getenv("AWS_REGION")
+    access_key = os.getenv("AWS_ACCESS_KEY_ID")
+    secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    session_token = os.getenv("AWS_SESSION_TOKEN")
     try:
         bucket = bucket or st.secrets.get("AGRI_S3_BUCKET")
         region = region or st.secrets.get("AWS_REGION")
+        access_key = access_key or st.secrets.get("AWS_ACCESS_KEY_ID")
+        secret_key = secret_key or st.secrets.get("AWS_SECRET_ACCESS_KEY")
+        session_token = session_token or st.secrets.get("AWS_SESSION_TOKEN")
     except (FileNotFoundError, KeyError, AttributeError, TypeError):
         pass
-    return bucket, region
+    return bucket, region, access_key, secret_key, session_token
+
+
+def storage_client(region, access_key, secret_key, session_token):
+    if boto3 is None:
+        return None
+    return boto3.client(
+        "s3",
+        region_name=region,
+        aws_access_key_id=access_key or None,
+        aws_secret_access_key=secret_key or None,
+        aws_session_token=session_token or None,
+    )
 
 
 def save_cloud_snapshot():
@@ -504,21 +702,34 @@ def save_cloud_snapshot():
         },
         "orders": st.session_state.orders,
     }
-    local_saved = save_local_snapshot(payload)
-    bucket, region = storage_config()
+    bucket, region, access_key, secret_key, session_token = storage_config()
+    hosted = hosted_streamlit_deployment()
     if not bucket or boto3 is None:
-        return local_saved
+        if hosted or bucket:
+            return False
+        return save_local_snapshot(payload)
     try:
-        boto3.client("s3", region_name=region).put_object(
+        expected_etag = st.session_state.get("cloud_snapshot_etag")
+        conditional_write = (
+            {"IfMatch": expected_etag}
+            if expected_etag
+            else {"IfNoneMatch": "*"}
+        )
+        response = storage_client(region, access_key, secret_key, session_token).put_object(
             Bucket=bucket,
             Key="agridirect/state.json",
             Body=json.dumps(payload, default=str).encode(),
             ContentType="application/json",
+            ServerSideEncryption="AES256",
+            **conditional_write,
         )
     except (BotoCoreError, ClientError, OSError, ValueError):
-        # Cloud credentials are optional; never make checkout or publishing fail.
-        return local_saved
-    return local_saved
+        if hosted or bucket:
+            return False
+        return save_local_snapshot(payload)
+    st.session_state["cloud_snapshot_etag"] = response.get("ETag")
+    save_local_snapshot(payload)
+    return True
 
 
 def clear_persisted_marketplace():
@@ -529,19 +740,23 @@ def clear_persisted_marketplace():
             connection.commit()
     except sqlite3.Error:
         pass
-    bucket, region = storage_config()
+    bucket, region, access_key, secret_key, session_token = storage_config()
     if bucket and boto3 is not None:
         try:
-            boto3.client("s3", region_name=region).delete_object(Bucket=bucket, Key="agridirect/state.json")
+            storage_client(region, access_key, secret_key, session_token).delete_object(
+                Bucket=bucket,
+                Key="agridirect/state.json",
+            )
         except (BotoCoreError, ClientError, OSError):
             pass
 
 
 def sync_cloud_snapshot():
     """Refresh shared marketplace data without disturbing the signed-in session."""
-    snapshot = load_cloud_snapshot() or load_local_snapshot()
+    snapshot = load_persistent_snapshot()
     if not snapshot:
         return False
+    snapshot, _ = remove_legacy_demo_state(snapshot)
     if snapshot.get("products") is not None:
         st.session_state.products = [
             normalize_product(product)
@@ -576,18 +791,11 @@ def sync_cloud_snapshot():
 
 def seed_state():
     """Create a fresh in-memory marketplace for the current browser session."""
-    snapshot = load_cloud_snapshot() or load_local_snapshot()
+    snapshot = load_persistent_snapshot()
+    snapshot, migrated_legacy_data = remove_legacy_demo_state(snapshot)
     if "products" not in st.session_state:
-        seeded_products = [
-            {"id": 1, "name": "Farm Fresh Tomatoes", "category": "Vegetables", "price": 48.0, "unit": "kg", "stock": 32, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "farmer_location": "Shamirpet, Hyderabad", "farmer_lat": 17.595, "farmer_lon": 78.561, "crop_details": "Vine-ripened; harvested this morning.", "organic": True, "description": "Juicy, vine-ripened tomatoes harvested this morning.", "emoji": "🍅", "image_url": "https://images.unsplash.com/photo-1546094096-0df4bcaaa337?w=900"},
-            {"id": 2, "name": "Alphonso Mangoes", "category": "Fruits", "price": 180.0, "unit": "kg", "stock": 18, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "farmer_location": "Vikarabad, Telangana", "farmer_lat": 17.338, "farmer_lon": 77.904, "crop_details": "Naturally ripened seasonal mangoes.", "organic": True, "description": "Naturally sweet seasonal mangoes from our orchard.", "emoji": "🥭", "image_url": "https://images.unsplash.com/photo-1553279768-865429fa0078?w=900"},
-            {"id": 3, "name": "Organic Basmati Rice", "category": "Grains", "price": 125.0, "unit": "kg", "stock": 50, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "farmer_location": "Shamirpet, Hyderabad", "farmer_lat": 17.595, "farmer_lon": 78.561, "crop_details": "Aromatic long-grain rice; no synthetic pesticides.", "organic": True, "description": "Aromatic long-grain rice, grown without synthetic pesticides.", "emoji": "🌾", "image_url": "https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?w=900"},
-            {"id": 4, "name": "Cold-Pressed Groundnut Oil", "category": "Pantry", "price": 220.0, "unit": "litre", "stock": 12, "farmer": "Harvest Collective", "farmer_id": "farmer@agridirect.local", "farmer_location": "Medchal, Telangana", "farmer_lat": 17.629, "farmer_lon": 78.481, "crop_details": "Small-batch wood-pressed groundnuts.", "organic": False, "description": "Small-batch wood-pressed oil with a rich, nutty flavour.", "emoji": "🫙", "image_url": "https://images.unsplash.com/photo-1474979266404-7eaacbcd87c5?w=900"},
-            {"id": 5, "name": "Fresh Spinach", "category": "Vegetables", "price": 35.0, "unit": "bunch", "stock": 40, "farmer": "Green Valley Farm", "farmer_id": "farmer@agridirect.local", "farmer_location": "Shamirpet, Hyderabad", "farmer_lat": 17.595, "farmer_lon": 78.561, "crop_details": "Tender leafy greens picked at sunrise.", "organic": True, "description": "Tender leafy greens picked at sunrise.", "emoji": "🥬", "image_url": "https://images.unsplash.com/photo-1576045057995-568f588f82fb?w=900"},
-            {"id": 6, "name": "Raw Forest Honey", "category": "Pantry", "price": 310.0, "unit": "500 g", "stock": 15, "farmer": "Sunrise Orchards", "farmer_id": "orchard@agridirect.local", "farmer_location": "Vikarabad, Telangana", "farmer_lat": 17.338, "farmer_lon": 77.904, "crop_details": "Unfiltered wildflower honey from local hives.", "organic": True, "description": "Unfiltered wildflower honey collected from local hives.", "emoji": "🍯", "image_url": "https://images.unsplash.com/photo-1587049352846-4a222e784d38?w=900"},
-        ]
         st.session_state.products = (
-            snapshot["products"] if snapshot and "products" in snapshot else seeded_products
+            snapshot["products"] if snapshot and "products" in snapshot else []
         )
         st.session_state.products = [
             normalize_product(product)
@@ -610,15 +818,7 @@ def seed_state():
         max((order.get("id", 1000) for order in st.session_state.orders), default=1000) + 1,
     )
     if "users" not in st.session_state:
-        st.session_state.users = merge_persistent_users({
-            email: {
-                "email": email,
-                "role": role,
-                "username": username,
-                "password": password_hash(password),
-            }
-            for email, (role, password, username) in DEMO_ACCOUNTS.items()
-        })
+        st.session_state.users = merge_persistent_users({})
         if snapshot and snapshot.get("users"):
             st.session_state.users.update(snapshot["users"])
             for user in st.session_state.users.values():
@@ -627,6 +827,31 @@ def seed_state():
             st.session_state.users = merge_persistent_users(st.session_state.users)
         for user in st.session_state.users.values():
             save_database_user(user)
+    session_state, migrated_session_data = remove_legacy_demo_state({
+        "users": st.session_state.users,
+        "products": st.session_state.products,
+        "orders": st.session_state.orders,
+    })
+    st.session_state.users = session_state["users"]
+    st.session_state.products = session_state["products"]
+    st.session_state.orders = session_state["orders"]
+    for user in st.session_state.users.values():
+        if user.get("role") == "Customer":
+            if any(
+                user.get(field)
+                for field in (
+                    "face_encoding",
+                    "last_face_capture",
+                    "last_face_verification",
+                )
+            ):
+                migrated_session_data = True
+            user["face_encoding"] = None
+            user["last_face_capture"] = None
+            user["last_face_verification"] = None
+            if user.get("frs_photo_name") == "first-login-face-capture":
+                user["frs_photo"] = None
+                user["frs_photo_name"] = None
     admin = configured_admin_account()
     st.session_state.users = enforce_single_admin(st.session_state.users, admin)
     if admin:
@@ -644,14 +869,56 @@ def seed_state():
         for user in st.session_state.users.values():
             if user.get("role") == "Admin":
                 save_database_user(user)
+    if st.session_state.get("authenticated_user") not in st.session_state.users:
+        st.session_state.authenticated_user = None
+        st.session_state.pop("pending_face_login", None)
     st.session_state.setdefault("authenticated_user", None)
-    if not snapshot:
+    if not snapshot or migrated_legacy_data or migrated_session_data:
         save_cloud_snapshot()
 
 
 def registration_view():
     st.subheader("Create your AgriDirect account")
     st.caption("Complete the form once. Your account is saved for future sign-ins.")
+    pending_registration = st.session_state.get("pending_registration")
+    if pending_registration:
+        email = pending_registration["email"]
+        st.info(f"Enter the verification code sent to {email} to activate the account.")
+        with st.form("registration-email-verification-form"):
+            code = st.text_input("Email verification code", max_chars=6)
+            verify = st.form_submit_button("Verify email and create account", type="primary")
+        if verify:
+            valid, message = check_verification(email, "registration", code)
+            if not valid:
+                st.error(message)
+            elif hosted_streamlit_deployment() and not durable_storage_configured():
+                st.error("Account creation is paused until durable S3 storage is configured for this hosted marketplace.")
+            else:
+                account = pending_registration["account"]
+                if not save_database_user(account):
+                    st.error("Your account could not be saved. Check the database location and try again.")
+                else:
+                    st.session_state.users[account["email"]] = account
+                    if not save_cloud_snapshot():
+                        st.session_state.users.pop(account["email"], None)
+                        delete_database_user(account["email"])
+                        st.error("Account creation failed because durable marketplace storage is unavailable. No account was created.")
+                    else:
+                        st.session_state.pop("pending_registration", None)
+                        st.session_state.pop("show_create_account", None)
+                        continue_after_password(account)
+                        st.success("Email verified and account created.")
+                        st.rerun()
+        if st.button("Resend verification code", key="resend-registration-code"):
+            if start_verification(email, "AgriDirect account verification", "registration"):
+                st.success("A new verification code was sent.")
+            else:
+                st.error("Email delivery is unavailable. Check the SMTP settings in Streamlit secrets.")
+        if st.button("Cancel account creation", key="cancel-pending-registration"):
+            st.session_state.pop("pending_registration", None)
+            st.session_state.pop("pending_email_verification", None)
+            st.rerun()
+        return
     st.markdown("#### 🎙️ AI account assistant")
     st.caption("Speak or type your email, username, and account type. The assistant fills those fields; enter your password manually.")
     registration_language = st.selectbox("Assistant language", list(ASSISTANT_LANGUAGES), key="registration-assistant-language")
@@ -696,10 +963,10 @@ def registration_view():
     if create_account:
         normalized_email = new_email.strip().lower()
         username = new_username.strip().lower()
-        if "@" not in normalized_email or not new_password or not username:
+        if not EMAIL_PATTERN.fullmatch(normalized_email) or not new_password or not username:
             st.error("Enter a valid email, username, and password.")
-        elif len(new_password) < 8:
-            st.error("Password must be at least 8 characters.")
+        elif len(new_password) < 12:
+            st.error("Password must be at least 12 characters.")
         elif new_password != confirm_password:
             st.error("Passwords do not match.")
         elif normalized_email in st.session_state.users or database_account_exists(normalized_email, username):
@@ -720,17 +987,18 @@ def registration_view():
                 "frs_photo_name": farmer_photo.name if farmer_photo else None,
                 "face_encoding": enrolled_encoding,
             }
-            if not save_database_user(account):
-                st.error("Your account could not be saved. Check the database location and try again.")
+            if not email_transport_config():
+                st.error("Account registration requires verified-email delivery. Configure the SMTP settings in Streamlit secrets first.")
+            elif hosted_streamlit_deployment() and not durable_storage_configured():
+                st.error("Account registration is paused until durable S3 storage is configured for this hosted marketplace.")
+            elif not start_verification(normalized_email, "AgriDirect account verification", "registration"):
+                st.error("The verification email could not be sent. Check SMTP settings and try again.")
             else:
-                st.session_state.users[account["email"]] = account
-                save_cloud_snapshot()
-                st.session_state.pop("show_create_account", None)
-                continue_after_password(account)
-                if account_role in {"Farmer", "Admin"}:
-                    st.success("Account created. Allow camera access to enroll or verify your face before entering AgriDirect.")
-                else:
-                    st.success("Customer account created. You are now signed in.")
+                st.session_state.pending_registration = {
+                    "email": normalized_email,
+                    "account": account,
+                }
+                st.success("A verification code was sent to your email. Enter it to create the account.")
                 st.rerun()
     if st.button("Back to sign in", key="back-to-signin"):
         st.session_state.pop("show_create_account", None)
@@ -739,29 +1007,62 @@ def registration_view():
 
 def password_reset_view():
     st.subheader("Reset your password")
-    st.caption("Use the email address or username saved on this local AgriDirect deployment.")
-    with st.form("password-reset-form"):
-        identity = st.text_input("Registered email or username", key="reset-identity")
-        new_password = st.text_input("New password", type="password", key="reset-password")
-        confirm_password = st.text_input("Confirm new password", type="password", key="reset-confirm")
-        reset_submitted = st.form_submit_button("Save new password", type="primary", use_container_width=True)
-    if reset_submitted:
-        user = find_account(identity)
-        if not user:
-            st.error("No account was found for that email or username.")
-        elif len(new_password) < 8:
-            st.error("Password must be at least 8 characters.")
-        elif new_password != confirm_password:
-            st.error("Passwords do not match.")
-        else:
-            user["password"] = password_hash(new_password)
-            if save_database_user(user):
-                save_cloud_snapshot()
-                st.session_state.pop("show_password_reset", None)
-                st.success("Your password was reset successfully. Sign in with the new password.")
-                st.rerun()
+    st.caption("A one-time code is sent to your registered email. Admin credentials are managed in deployment secrets.")
+    pending = st.session_state.get("pending_email_verification")
+    if pending and pending.get("purpose") == "password_reset":
+        email = pending["email"]
+        with st.form("password-reset-form"):
+            code = st.text_input("Email verification code", max_chars=6)
+            new_password = st.text_input("New password", type="password")
+            confirm_password = st.text_input("Confirm new password", type="password")
+            reset_submitted = st.form_submit_button("Verify and save password", type="primary")
+        if reset_submitted:
+            valid, message = check_verification(email, "password_reset", code)
+            user = st.session_state.users.get(email)
+            if not valid:
+                st.error(message)
+            elif not user or user["role"] == "Admin":
+                st.session_state.pop("pending_email_verification", None)
+                st.error("Admin passwords must be changed through the protected deployment secrets.")
+            elif len(new_password) < 12:
+                st.error("Password must be at least 12 characters.")
+            elif new_password != confirm_password:
+                st.error("Passwords do not match.")
+            elif hosted_streamlit_deployment() and not durable_storage_configured():
+                st.error("Password reset is unavailable until durable storage is configured.")
             else:
-                st.error("The password could not be saved. Check the database location and try again.")
+                previous_password = user["password"]
+                user["password"] = password_hash(new_password)
+                if save_database_user(user) and save_cloud_snapshot():
+                    st.session_state.pop("show_password_reset", None)
+                    st.success("Your password was reset successfully. Sign in with the new password.")
+                    st.rerun()
+                else:
+                    user["password"] = previous_password
+                    save_database_user(user)
+                    st.error("The password could not be saved to durable storage.")
+        if st.button("Resend password code", key="resend-password-code"):
+            if start_verification(email, "AgriDirect password reset", "password_reset"):
+                st.success("A new verification code was sent.")
+            else:
+                st.error("Email delivery is unavailable. Check the SMTP settings in Streamlit secrets.")
+    else:
+        with st.form("password-reset-request-form"):
+            email = st.text_input("Registered email address", key="reset-email")
+            request_code = st.form_submit_button("Send verification code", type="primary")
+        if request_code:
+            normalized_email = email.strip().lower()
+            user = st.session_state.users.get(normalized_email)
+            if user and user["role"] != "Admin" and email_transport_config():
+                if not start_verification(normalized_email, "AgriDirect password reset", "password_reset"):
+                    st.error("The verification email could not be sent. Check SMTP settings and try again.")
+                else:
+                    st.success("If that address belongs to an account, a verification code was sent.")
+                    st.rerun()
+            elif not email_transport_config():
+                st.error("Password recovery requires verified-email delivery. Configure the SMTP settings in Streamlit secrets first.")
+            else:
+                st.success("If that address belongs to an account, a verification code was sent.")
     if st.button("Back to sign in", key="back-from-password-reset"):
         st.session_state.pop("show_password_reset", None)
         st.rerun()
@@ -769,8 +1070,18 @@ def password_reset_view():
 
 def authentication_view():
     st.title("🌱 Welcome to AgriDirect")
-    st.success("Welcome! Sign in to continue to your AgriDirect marketplace.")
+    st.success("Sign in to continue to AgriDirect.")
     st.write("Use your registered email or username and password to shop, manage listings, or review marketplace operations.")
+    if not configured_admin_account():
+        st.warning(
+            "Administrator setup is incomplete. Configure a unique admin email, username, "
+            "and password of at least 12 characters in Streamlit secrets before operating the marketplace."
+        )
+    if hosted_streamlit_deployment() and not durable_storage_configured():
+        st.error(
+            "Durable storage is not configured. Hosted account creation, face enrollment, and "
+            "marketplace changes are disabled until an S3 bucket and AWS credentials are configured."
+        )
     st.session_state.setdefault("login_voice_mode", False)
     voice_left, voice_right = st.columns([4, 1])
     with voice_left:
@@ -891,66 +1202,11 @@ def authentication_view():
         if st.button("Forgot password?", use_container_width=True, key="forgot-password"):
             st.session_state["show_password_reset"] = True
             st.rerun()
-        if st.session_state.get("show_create_account"):
-            st.info("Open the Create account tab above to register once. Your account is saved for future sign-ins.")
     with register_tab:
-        account_role = st.selectbox("Account type", ["Customer", "Farmer"], key="register-role")
-        farmer_photo = st.file_uploader(
-            "Farmer FRS profile photo (required for farmer accounts)",
-            type=IMAGE_TYPES,
-            help="Upload a clear face photo for the farmer registration profile.",
-            disabled=account_role != "Farmer",
-            key="frs-profile-photo",
-        )
-        with st.form("register-form"):
-            new_email = st.text_input("Email address", key="register-email")
-            new_username = st.text_input("Username", key="register-username", help="Farmers use this username to sign in to the FRS portal.")
-            new_password = st.text_input("Password", type="password", key="register-password")
-            confirm_password = st.text_input("Confirm password", type="password")
-            create_account = st.form_submit_button("Create account", type="primary", use_container_width=True)
-        if create_account:
-            normalized_email = new_email.strip().lower()
-            username = new_username.strip().lower()
-            if "@" not in normalized_email or not new_password or not username:
-                st.error("Enter a valid email and password.")
-            elif len(new_password) < 8:
-                st.error("Password must be at least 8 characters.")
-            elif new_password != confirm_password:
-                st.error("Passwords do not match.")
-            elif normalized_email in st.session_state.users or database_account_exists(normalized_email, username):
-                st.error("An account with that email already exists.")
-            elif any(user["username"] == username for user in st.session_state.users.values()):
-                st.error("That username is already taken.")
-            elif account_role == "Farmer" and not farmer_photo:
-                st.error("Farmer registration requires an FRS profile photo.")
-            else:
-                enrolled_encoding = (
-                    face_encoding(farmer_photo.getvalue())
-                    if farmer_photo and account_role == "Farmer" else None
-                )
-                if account_role == "Farmer" and face_recognition is not None and not enrolled_encoding:
-                    st.error("No clear face was found in that photo. Upload one clear, front-facing farmer photo.")
-                    return
-                account = {
-                    "email": normalized_email,
-                    "role": account_role,
-                    "username": username,
-                    "password": password_hash(new_password),
-                    "frs_photo": farmer_photo.getvalue() if farmer_photo else None,
-                    "frs_photo_name": farmer_photo.name if farmer_photo else None,
-                    "face_encoding": enrolled_encoding,
-                }
-                if not save_database_user(account):
-                    st.error("Your account could not be saved. Check the database location and try again.")
-                else:
-                    st.session_state.users[account["email"]] = account
-                    save_cloud_snapshot()
-                    continue_after_password(account)
-                    if account["role"] in {"Farmer", "Admin"}:
-                        st.success("Account created. Allow camera access to enroll or verify your face before entering AgriDirect.")
-                    else:
-                        st.success("Customer account created. You are now signed in.")
-                    st.rerun()
+        st.write("New accounts require email verification before access is granted.")
+        if st.button("Start verified registration", key="start-verified-registration"):
+            st.session_state["show_create_account"] = True
+            st.rerun()
 
 
 def money(value):
@@ -1249,7 +1505,9 @@ def marketplace_browser():
         and (not organic_only or p["organic"])
         and p["stock"] > 0
     ]
-    if not filtered:
+    if not st.session_state.products:
+        st.info("No farmer listings are available yet. Verified farmers can create real listings from the Farmer workspace.")
+    elif not filtered:
         st.info("No products match those filters.")
     else:
         columns = st.columns(3)
@@ -1337,7 +1595,7 @@ def update_quantity(product_id):
 
 def place_order(address, city, pincode, total, context_product, distance_km, eta_minutes, destination):
     purchased_rows = cart_rows()
-    transaction_id = f"AGR-{datetime.now().strftime('%Y%m%d%H%M%S')}-{secrets.token_hex(3).upper()}"
+    order_reference = f"AGR-ORD-{secrets.token_hex(6).upper()}"
     order = {
         "id": st.session_state.next_order_id,
         "created": datetime.now().strftime("%d %b %Y, %I:%M %p"),
@@ -1361,7 +1619,7 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
         "status": "Placed",
         "payment": "Cash on Delivery",
         "payment_status": "Pay at delivery",
-        "transaction_id": transaction_id,
+        "order_reference": order_reference,
         "owner_email": st.session_state.authenticated_user,
         "farmer": context_product.get("farmer"),
         "farmer_id": context_product.get("farmer_id"),
@@ -1388,8 +1646,8 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
         return
     st.success(f"Purchase completed successfully! Order #{order['id']} was created.")
     st.info(
-        f"Transaction **{transaction_id}** · Total **{money(total)}** · "
-        f"Payment: **Cash on Delivery** ({order['payment_status']})."
+        f"Order reference **{order_reference}** · Total **{money(total)}** · "
+        f"Cash on Delivery is due to the farmer/operator at delivery."
     )
     st.balloons()
 
@@ -1498,6 +1756,7 @@ def admin_order_notifications():
 def cancel_order(order):
     if order.get("status") not in {"Placed", "Confirmed", "Preparing"}:
         return False
+    restored = []
     for item in order.get("items", []):
         product = next(
             (
@@ -1512,12 +1771,25 @@ def cancel_order(order):
             None,
         )
         if product:
+            restored.append((product, int(product.get("stock", 0))))
             product["stock"] = int(product.get("stock", 0)) + int(item.get("quantity", 0))
+    previous_status = order.get("status")
+    previous_payment_status = order.get("payment_status")
+    previous_cancelled_at = order.get("cancelled_at")
     order["status"] = "Cancelled"
     order["payment_status"] = "Not collected"
     order["cancelled_at"] = datetime.now().isoformat()
-    save_cloud_snapshot()
-    return True
+    if save_cloud_snapshot():
+        return True
+    order["status"] = previous_status
+    order["payment_status"] = previous_payment_status
+    if previous_cancelled_at is None:
+        order.pop("cancelled_at", None)
+    else:
+        order["cancelled_at"] = previous_cancelled_at
+    for product, stock in restored:
+        product["stock"] = stock
+    return False
 
 
 def render_orders():
@@ -1541,7 +1813,7 @@ def render_orders():
             columns[2].metric(order["status"], money(order["total"]))
             st.caption(
                 f"{order['payment']} ({order.get('payment_status', 'Recorded')}) · "
-                f"Transaction: {order.get('transaction_id', 'Legacy order')} · "
+                f"Order reference: {order.get('order_reference', 'Not recorded')} · "
                 f"Deliver to {order['address']} · "
                 f"Farmer: {order.get('farmer', 'Not recorded')} ({order.get('farmer_location', 'Location not provided')})"
             )
@@ -1557,13 +1829,15 @@ def render_orders():
                     if cancel_order(order):
                         st.success(f"Your order #{order['id']} was cancelled immediately.")
                         st.rerun()
+                    else:
+                        st.error("Cancellation was not saved to durable storage. Your order and stock were left unchanged.")
 
 
 def farmer_view():
     sync_cloud_snapshot()
     st.title("🚜 Farmer workspace")
     st.write("Manage your listings and see what customers are buying.")
-    farmer_id = st.session_state.get("user_email", "farmer@agridirect.local")
+    farmer_id = st.session_state.get("user_email", "")
     mine = [p for p in st.session_state.products if p["farmer_id"] == farmer_id]
     columns = st.columns(3)
     columns[0].metric("Your listings", len(mine))
@@ -1668,38 +1942,48 @@ def admin_view():
     if configured_admin:
         st.info(f"Configured admin login: `{configured_admin['email']}` (or `{configured_admin['username']}`).")
     else:
-        st.info("Demo admin login: `admin@agridirect.local` (or `admin`) · password: `admin123`. Configure a real admin in Streamlit secrets before production use.")
+        st.error("Admin secrets are not configured. No fallback administrator account exists.")
     customers = sum(1 for user in st.session_state.users.values() if user["role"] == "Customer")
     farmers = len({p["farmer_id"] for p in st.session_state.products})
-    revenue = sum(order["total"] for order in st.session_state.orders)
+    gross_order_value = sum(
+        order["total"] for order in st.session_state.orders
+        if order.get("status") not in {"Cancelled", "Refunded"}
+    )
     today = date.today().isoformat()
     daily_orders = [
         order for order in st.session_state.orders
-        if order_date(order) == today
+        if order_date(order) == today and order.get("status") not in {"Cancelled", "Refunded"}
     ]
-    daily_income = sum(order["total"] for order in daily_orders)
+    daily_order_value = sum(order["total"] for order in daily_orders)
+    collected_cod = sum(
+        order["total"] for order in st.session_state.orders
+        if order.get("payment_status") == "Collected"
+    )
     pending_cod = sum(
         order["total"] for order in st.session_state.orders
-        if order.get("status") != "Delivered"
+        if order.get("payment_status") != "Collected"
+        and order.get("status") not in {"Cancelled", "Refunded"}
     )
-    columns = st.columns(5)
+    columns = st.columns(7)
     columns[0].metric("Products", len(st.session_state.products))
     columns[1].metric("Farmers", farmers)
-    columns[2].metric("Orders", len(st.session_state.orders))
-    columns[3].metric("Total income", money(revenue), help="Gross value of all COD orders recorded by this deployment.")
-    columns[4].metric("Pending COD", money(pending_cod), help="Order value not yet marked Delivered.")
+    columns[2].metric("Customers", customers)
+    columns[3].metric("Orders", len(st.session_state.orders))
+    columns[4].metric("Gross order value", money(gross_order_value), help="Value of non-cancelled orders; this is not collected revenue.")
+    columns[5].metric("COD collected", money(collected_cod), help="Cash manually confirmed as received by an administrator.")
+    columns[6].metric("COD due", money(pending_cod), help="Non-cancelled COD orders not manually confirmed as collected.")
     st.caption(
-        f"Income today: **{money(daily_income)}** · "
-        f"All-time gross income: **{money(revenue)}** · "
-        "Amounts update when customers place orders and when order status changes."
+        f"Today's non-cancelled order value: **{money(daily_order_value)}** · "
+        f"Recorded COD collections: **{money(collected_cod)}**. "
+        "Order value is not payment; COD collection must be confirmed by an operator."
     )
     admin_order_notifications()
-    report_tabs = st.tabs(["Daily income", "Transaction summary", "Full order history"])
+    report_tabs = st.tabs(["Daily order value", "Order summary", "Full order history"])
     with report_tabs[0]:
-        st.metric("Today's income", money(daily_income), help="Completed or placed COD order value recorded today.")
+        st.metric("Today's order value", money(daily_order_value), help="Non-cancelled COD order value placed today, not money received.")
         st.dataframe(
             pd.DataFrame([
-                {"Order": order["id"], "Time": order["created"], "Income": money(order["total"]),
+                {"Order": order["id"], "Time": order["created"], "Order value": money(order["total"]),
                  "Farmer": order.get("farmer", "—"), "Status": order["status"]}
                 for order in daily_orders
             ]),
@@ -1708,16 +1992,18 @@ def admin_view():
     with report_tabs[1]:
         status_counts = pd.Series([order["status"] for order in st.session_state.orders]).value_counts() if st.session_state.orders else pd.Series(dtype=int)
         summary = pd.DataFrame([
-            {"Metric": "All transactions", "Value": str(len(st.session_state.orders))},
-            {"Metric": "Gross order value", "Value": money(revenue)},
-            {"Metric": "Average order value", "Value": money(revenue / len(st.session_state.orders)) if st.session_state.orders else money(0)},
+            {"Metric": "All orders", "Value": str(len(st.session_state.orders))},
+            {"Metric": "Gross order value", "Value": money(gross_order_value)},
+            {"Metric": "COD collected", "Value": money(collected_cod)},
+            {"Metric": "COD due", "Value": money(pending_cod)},
+            {"Metric": "Average order value", "Value": money(gross_order_value / len(st.session_state.orders)) if st.session_state.orders else money(0)},
             *({"Metric": f"Orders — {status}", "Value": str(int(count))} for status, count in status_counts.items()),
         ])
         st.dataframe(summary, use_container_width=True, hide_index=True)
     with report_tabs[2]:
         history = [
             {
-                "Order": order["id"], "Transaction": order.get("transaction_id", "Legacy order"),
+                "Order": order["id"], "Order reference": order.get("order_reference", "Not recorded"),
                 "Date": order["created"], "Customer": order.get("owner_email", "—"),
                 "Items": " | ".join(
                     f"{item.get('name', 'Product')} × {item.get('quantity', 0)} "
@@ -1736,23 +2022,23 @@ def admin_view():
     st.subheader("Visual reports")
     delivered_value = sum(
         order["total"] for order in st.session_state.orders
-        if order.get("status") == "Delivered"
+        if order.get("status") == "Delivered" and order.get("payment_status") == "Collected"
     )
     cancelled_value = sum(
         order["total"] for order in st.session_state.orders
         if str(order.get("status", "")).lower() in {"cancelled", "refunded"}
     )
-    pending_value = max(revenue - delivered_value - cancelled_value, 0)
+    pending_value = pending_cod
     gain_loss_data = pd.DataFrame([
-        {"Type": "Delivered gains", "Amount": delivered_value},
+        {"Type": "COD collected", "Amount": delivered_value},
         {"Type": "Pending COD value", "Amount": pending_value},
-        {"Type": "Cancelled/refunded losses", "Amount": cancelled_value},
+        {"Type": "Cancelled order value", "Amount": cancelled_value},
     ])
     chart_columns = st.columns(2)
     with chart_columns[0]:
-        st.markdown("**Gains, pending value, and recorded losses**")
+        st.markdown("**COD collected, pending value, and cancelled value**")
         st.bar_chart(gain_loss_data.set_index("Type"), y="Amount", color="#2e7d32")
-        st.caption("Losses include only orders explicitly marked Cancelled or Refunded; no operating costs are recorded.")
+        st.caption("COD collection is recorded manually after an operator confirms payment. Cancelled orders are not payments or losses.")
     with chart_columns[1]:
         status_data = pd.DataFrame([
             {"Status": status, "Orders": sum(
@@ -1769,12 +2055,12 @@ def admin_view():
     farmer_interest = {}
     for order in st.session_state.orders:
         farmer = order.get("farmer") or order.get("farmer_id") or "Unknown farmer"
-        farmer_interest.setdefault(farmer, {"orders": 0, "revenue": 0.0})
+        farmer_interest.setdefault(farmer, {"orders": 0, "order_value": 0.0})
         farmer_interest[farmer]["orders"] += 1
-        farmer_interest[farmer]["revenue"] += float(order.get("total", 0))
+        farmer_interest[farmer]["order_value"] += float(order.get("total", 0))
     if farmer_interest:
         interest_data = pd.DataFrame([
-            {"Farmer": farmer, "Orders": values["orders"], "Revenue": values["revenue"]}
+            {"Farmer": farmer, "Orders": values["orders"], "Order value": values["order_value"]}
             for farmer, values in farmer_interest.items()
         ]).sort_values("Orders", ascending=False)
         interest_columns = st.columns(2)
@@ -1790,7 +2076,7 @@ def admin_view():
                         "tooltip": [
                             {"field": "Farmer", "type": "nominal"},
                             {"field": "Orders", "type": "quantitative"},
-                            {"field": "Revenue", "type": "quantitative"},
+                            {"field": "Order value", "type": "quantitative"},
                         ],
                     },
                     "title": "Customer order share by farmer",
@@ -1798,8 +2084,8 @@ def admin_view():
                 use_container_width=True,
             )
         with interest_columns[1]:
-            st.markdown("**Farmer revenue comparison**")
-            st.bar_chart(interest_data.set_index("Farmer"), y="Revenue", color="#ef6c00")
+            st.markdown("**Farmer order-value comparison**")
+            st.bar_chart(interest_data.set_index("Farmer"), y="Order value", color="#ef6c00")
     else:
         st.info("Farmer interest charts will appear after the first customer order.")
     st.subheader("Registered accounts")
@@ -1852,7 +2138,7 @@ def admin_view():
                 "Username": f"@{user['username']}",
                 "Email": user["email"],
                 "Profile photo": "Saved" if user.get("frs_photo") else "Missing",
-                "Face matching": "Enabled" if user.get("face_encoding") else "Optional/unavailable",
+                "Face matching": "Enabled" if user.get("face_encoding") else "Unavailable — sign-in blocked",
                 "Last face verification": user.get("last_face_verification") or "Not recorded",
                 "Latest capture": "Saved" if user.get("last_face_capture") else "Not captured",
             }
@@ -1919,11 +2205,12 @@ def admin_view():
     else:
         st.info("No valid farmer coordinates are available yet. Ask farmers to add latitude and longitude when publishing a listing.")
     st.subheader("Marketplace inventory")
-    inventory = pd.DataFrame(st.session_state.products)
-    for column, default in {"farmer_location": "Location not provided", "crop_details": ""}.items():
-        if column not in inventory:
-            inventory[column] = default
-    st.dataframe(inventory[["name", "category", "farmer", "farmer_location", "crop_details", "price", "stock", "organic"]], use_container_width=True, hide_index=True)
+    inventory_columns = [
+        "name", "category", "farmer", "farmer_location",
+        "crop_details", "price", "stock", "organic",
+    ]
+    inventory = pd.DataFrame(st.session_state.products).reindex(columns=inventory_columns)
+    st.dataframe(inventory, use_container_width=True, hide_index=True)
     if st.session_state.products:
         selected_product = st.selectbox(
             "Product to moderate",
@@ -1934,13 +2221,21 @@ def admin_view():
             key="admin-product-moderation",
         )
         if st.button("Remove product from marketplace", key="admin-remove-product"):
+            removed_product = next(
+                product for product in st.session_state.products
+                if product["id"] == selected_product
+            )
+            previous_cart_quantity = st.session_state.cart.pop(selected_product, None)
             st.session_state.products = [
                 product for product in st.session_state.products if product["id"] != selected_product
             ]
-            st.session_state.cart.pop(selected_product, None)
-            save_cloud_snapshot()
-            st.success("Product removed from the customer marketplace.")
-            st.rerun()
+            if save_cloud_snapshot():
+                st.success("Product removed from the customer marketplace.")
+                st.rerun()
+            st.session_state.products.append(removed_product)
+            if previous_cart_quantity is not None:
+                st.session_state.cart[selected_product] = previous_cart_quantity
+            st.error("The product could not be removed from durable storage.")
     if st.session_state.orders:
         st.subheader("Recent orders")
         order_data = [
@@ -1953,16 +2248,41 @@ def admin_view():
             for o in st.session_state.orders
         ]
         st.dataframe(pd.DataFrame(order_data), use_container_width=True, hide_index=True)
-        st.caption("Demo controls: advance an order status to preview fulfillment management.")
+        st.caption("Record fulfillment only after the responsible farmer/operator confirms each real delivery step.")
         selected = st.selectbox("Order", [o["id"] for o in st.session_state.orders])
         new_status = st.selectbox("Set status", ORDER_STATUSES + ["Cancelled"])
         if st.button("Update order status"):
             selected_order = next(order for order in st.session_state.orders if order["id"] == selected)
-            selected_order["status"] = new_status
             if new_status == "Cancelled":
-                selected_order["payment_status"] = "Not collected"
-            save_cloud_snapshot()
-            st.success(f"Order #{selected} updated to {new_status}.")
+                if cancel_order(selected_order):
+                    st.success(f"Order #{selected} cancelled and stock restored.")
+                else:
+                    st.error("Only orders not yet dispatched can be cancelled; stock was not changed.")
+            else:
+                old_status = selected_order["status"]
+                selected_order["status"] = new_status
+                if save_cloud_snapshot():
+                    st.success(f"Order #{selected} updated to {new_status}.")
+                else:
+                    selected_order["status"] = old_status
+                    st.error("The order update could not be saved to durable storage.")
+        selected_order = next(order for order in st.session_state.orders if order["id"] == selected)
+        if selected_order["status"] == "Delivered" and selected_order.get("payment_status") != "Collected":
+            st.warning("Only record this after the farmer/operator confirms the COD cash was received.")
+            if st.button("Record COD cash received", key="record-cod-collected"):
+                previous_status = selected_order.get("payment_status")
+                previous_collected_at = selected_order.get("collected_at")
+                selected_order["payment_status"] = "Collected"
+                selected_order["collected_at"] = datetime.now().isoformat()
+                if save_cloud_snapshot():
+                    st.success(f"COD collection recorded for order #{selected}.")
+                else:
+                    selected_order["payment_status"] = previous_status
+                    if previous_collected_at is None:
+                        selected_order.pop("collected_at", None)
+                    else:
+                        selected_order["collected_at"] = previous_collected_at
+                    st.error("COD collection could not be recorded in durable storage.")
 
 
 def main():
@@ -1979,6 +2299,7 @@ def main():
         unsafe_allow_html=True,
     )
     if not st.session_state.authenticated_user:
+        sync_cloud_snapshot()
         authentication_view()
         return
     st.sidebar.title("AgriDirect")
@@ -2005,16 +2326,13 @@ def main():
     else:
         admin_view()
     st.sidebar.divider()
-    st.sidebar.caption("Accounts and marketplace data persist in SQLite; shared S3 sync is optional.")
+    st.sidebar.caption(
+        "Hosted marketplace changes require the configured durable S3 storage."
+        if hosted_streamlit_deployment()
+        else "Local development data persists in SQLite."
+    )
     if st.sidebar.button("Sign out", use_container_width=True):
         st.session_state.authenticated_user = None
         st.rerun()
-    if role == "Admin" and st.sidebar.button("Reset demo data"):
-        clear_persisted_marketplace()
-        for key in ["products", "cart", "orders", "next_product_id", "next_order_id"]:
-            st.session_state.pop(key, None)
-        st.rerun()
-
-
 if __name__ == "__main__":
     main()
