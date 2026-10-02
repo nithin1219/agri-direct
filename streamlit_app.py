@@ -36,7 +36,10 @@ except ImportError:
     BotoCoreError = ClientError = OSError
     BotoConfig = None
 
-face_recognition = None
+dlib_runtime = None
+face_detector = None
+landmark_predictor = None
+face_encoder = None
 np = None
 _face_runtime_loaded = False
 
@@ -607,28 +610,44 @@ def face_encoding(image_bytes):
     if not load_face_runtime():
         return None
     try:
-        image = face_recognition.load_image_file(io.BytesIO(image_bytes))
-        encodings = face_recognition.face_encodings(image)
-        return encodings[0].tolist() if encodings else None
+        from PIL import Image
+
+        image = np.asarray(Image.open(io.BytesIO(image_bytes)).convert("RGB"))
+        faces = face_detector(image, 1)
+        if not faces:
+            return None
+        landmarks = landmark_predictor(image, faces[0])
+        return list(face_encoder.compute_face_descriptor(image, landmarks, 1))
     except (OSError, ValueError, RuntimeError):
         return None
 
 
 def load_face_runtime():
-    global face_recognition, np, _face_runtime_loaded
-    if face_recognition is not None and np is not None:
+    global dlib_runtime, face_detector, landmark_predictor, face_encoder, np, _face_runtime_loaded
+    if dlib_runtime is not None and np is not None:
         return True
     if _face_runtime_loaded:
         return False
     _face_runtime_loaded = True
     try:
-        import face_recognition as face_runtime
+        import dlib as dlib_module
+        import face_recognition_models
         import numpy as numpy_runtime
-    except (ImportError, OSError):
-        face_recognition = None
+        detector = dlib_module.get_frontal_face_detector()
+        predictor = dlib_module.shape_predictor(
+            face_recognition_models.pose_predictor_five_point_model_location()
+        )
+        encoder = dlib_module.face_recognition_model_v1(
+            face_recognition_models.face_recognition_model_location()
+        )
+    except (ImportError, OSError, RuntimeError):
+        dlib_runtime = None
         np = None
         return False
-    face_recognition = face_runtime
+    dlib_runtime = dlib_module
+    face_detector = detector
+    landmark_predictor = predictor
+    face_encoder = encoder
     np = numpy_runtime
     return True
 
@@ -638,7 +657,10 @@ def verify_face(image_bytes, reference):
         return False
     try:
         candidate = face_encoding(image_bytes)
-        return bool(candidate and face_recognition.compare_faces([np.asarray(reference)], np.asarray(candidate), tolerance=0.48)[0])
+        return bool(
+            candidate
+            and np.linalg.norm(np.asarray(reference) - np.asarray(candidate)) <= 0.48
+        )
     except (OSError, ValueError, RuntimeError):
         return False
 
@@ -1005,7 +1027,7 @@ def registration_view():
             st.error("Farmer registration requires an FRS profile photo.")
         else:
             enrolled_encoding = face_encoding(farmer_photo.getvalue()) if farmer_photo and account_role == "Farmer" else None
-            if account_role == "Farmer" and load_face_runtime() and not enrolled_encoding:
+            if account_role == "Farmer" and dlib_runtime is not None and not enrolled_encoding:
                 st.error("No clear face was found in that photo. Upload one clear, front-facing farmer photo.")
                 return
             account = {

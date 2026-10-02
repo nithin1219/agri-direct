@@ -60,9 +60,9 @@ Customer and Farmer registration requires a working SMTP account: a one-time ema
 1. Push this repository to GitHub.
 2. In [Streamlit Community Cloud](https://share.streamlit.io/), select the repository and the `main` branch.
 3. Set **Main file path** to `streamlit_app.py`.
-4. Deploy. Community Cloud installs the root `requirements.txt` and system packages in `packages.txt`; the latter supplies the compiler, CMake, and BLAS/LAPACK libraries needed to build the Linux face-matching runtime.
+4. Deploy. Community Cloud installs the root `requirements.txt`, including prebuilt `dlib-bin` wheels for supported Linux Python versions, so it does not need to compile dlib or install build-tool system packages.
 
-If Farmer/Admin sign-in reports that face matching is unavailable after deployment, confirm that the deployed branch includes both dependency files, then use **Manage app → Reboot** after the package installation finishes. Do not bypass face verification: Farmer/Admin sign-in remains blocked until the face-matching runtime is available.
+If Farmer/Admin sign-in reports that face matching is unavailable after deployment, confirm that the deployed branch includes the updated `requirements.txt`, then use **Manage app → Reboot** after installation finishes. Do not bypass face verification: Farmer/Admin sign-in remains blocked until the face-matching runtime is available.
 
 The public Community Cloud address is `https://agri-direct-nithin-1.streamlit.app/`. In **App settings**, set viewer access to the intended audience. A healthy `/healthz` endpoint does not verify app access or deployment success; check the app page and Streamlit Cloud logs after each deployment.
 
@@ -124,18 +124,17 @@ Customers can cancel an order while it is Placed, Confirmed, or Preparing. Cance
 
 Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. The local SQLite database supports development; hosted deployments require the configured S3 snapshot for durable, shared state.
 
-Farmer registration requires a verified email and a clear FRS profile photo. Farmer and Admin accounts require password and camera face verification; face templates and verification captures are stored in the account snapshot. Customers use email/password only. Farmer and Admin sign-in remains blocked if face matching or durable storage is unavailable; there is no password-only fallback. On Windows, install the verified prebuilt runtime without a Visual C++ build by running:
+Farmer registration requires a verified email and a clear FRS profile photo. Farmer and Admin accounts require password and camera face verification; face templates and verification captures are stored in the account snapshot. Customers use email/password only. Farmer and Admin sign-in remains blocked if face matching or durable storage is unavailable; there is no password-only fallback. The requirements file installs the prebuilt dlib runtime and matching face models on Windows and supported Linux Python versions. On Windows, install manually with:
 
 ```powershell
-python -m pip install "setuptools<81" dlib-bin==20.0.1 face-recognition-models==0.3.0
-python -m pip install --no-deps face-recognition==1.3.0
+python -m pip install dlib-bin==20.0.1 face-recognition-models==0.3.0
 ```
 
-On Linux, install the platform's C++ build tools, CMake, and Python headers before installing `face-recognition`. If face matching is unavailable, farmer login is blocked with a clear setup message rather than silently accepting an unverified face.
+If face matching is unavailable, farmer login is blocked with a clear setup message rather than silently accepting an unverified face.
 
 ### Voice and face features
 
-Face-matching dependencies are platform-specific in the root `requirements.txt`: Linux installs `face-recognition` and builds `dlib`; Streamlit Community Cloud installs the required compiler, CMake, and BLAS/LAPACK libraries from `packages.txt`. Other Linux hosts need equivalent system packages and Python development headers. Windows installs the prebuilt `dlib-bin`, then uses the `face-recognition --no-deps` command above. `st.audio_input` is used when provided by the installed Streamlit version. To transcribe recorded WAV audio, optionally install `SpeechRecognition` and provide the audio service it uses; otherwise use the transcript/text box. The listing assistant is a reviewable, lightweight field-prefill foundation, not a guarantee of translation or medical/agronomic advice.
+Face-matching uses the prebuilt `dlib-bin` runtime and `face-recognition-models` on supported platforms; startup loads the native runtime only when a Farmer/Admin face action needs it. `st.audio_input` is used when provided by the installed Streamlit version. To transcribe recorded WAV audio, optionally install `SpeechRecognition` and provide the audio service it uses; otherwise use the transcript/text box. The listing assistant is a reviewable, lightweight field-prefill foundation, not a guarantee of translation or medical/agronomic advice.
 
 When `AGRI_S3_BUCKET` and AWS credentials are configured, the app restores and writes users, hashed passwords, listings, uploaded image bytes, orders, and verification dates at `agridirect/state.json`. Do not store production credentials in source control; configure them as Streamlit secrets or deployment environment variables.
 
