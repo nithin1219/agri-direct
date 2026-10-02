@@ -30,13 +30,12 @@ Then open `http://<host-ip>:8501` from each phone, laptop, or desktop on the sam
 
 ### Required production configuration
 
-In Streamlit Community Cloud, open **App settings → Secrets** and configure a unique administrator account and the external services below. Never commit credentials:
+In Streamlit Community Cloud, open **App settings → Secrets** and configure a unique administrator account, Supabase Storage, and email delivery below. Never commit credentials:
 
 ```toml
-AGRI_S3_BUCKET = "your-private-agridirect-state-bucket"
-AWS_REGION = "ap-south-1"
-AWS_ACCESS_KEY_ID = "least-privilege-access-key"
-AWS_SECRET_ACCESS_KEY = "least-privilege-secret-key"
+SUPABASE_URL = "https://your-project-ref.supabase.co"
+SUPABASE_SERVICE_ROLE_KEY = "your-private-service-role-key"
+SUPABASE_STORAGE_BUCKET = "agridirect-private"
 
 [admin]
 email = "admin@your-domain.com"
@@ -53,7 +52,7 @@ from_address = "AgriDirect <noreply@your-domain.com>"
 
 Admin settings may alternatively be provided through the `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD` environment variables. The configured account becomes the only Admin; its password is stored as a PBKDF2 hash. There is deliberately no built-in or fallback admin password.
 
-Customer and Farmer registration requires a working SMTP account: a one-time email code is required before an account is created. Password recovery also requires a one-time email code; Admin passwords are changed only through deployment secrets. The app stores salted PBKDF2-HMAC-SHA256 password hashes (never plaintext) in SQLite and synchronizes marketplace state to the configured private S3 bucket using server-side encryption. Conditional ETag writes reject stale concurrent updates rather than silently overwriting another session's orders or inventory. On Streamlit Cloud, the app refuses to report hosted data changes as saved when S3 storage is not configured or a write conflicts/fails. Give the AWS identity only the bucket/object permissions this app needs. Do not use a public bucket for account records, addresses, or face data.
+The app creates the configured Supabase Storage bucket on first launch if it does not exist, and keeps it private. The service-role key is server-side only: store it in Streamlit secrets, never expose it to browser code or commit it. The app saves the full marketplace snapshot as `state.json` in that bucket. S3 remains supported as a fallback when Supabase secrets are not configured; S3 snapshot writes use ETag preconditions, while concurrent Supabase snapshot updates use object upserts and should be limited to a single active writer for consistency. Hosted marketplace changes fail closed when the configured storage cannot be reached or written. Customer and Farmer registration requires working SMTP email verification; password recovery also requires SMTP, and Admin passwords are managed through private deployment secrets.
 
 ## Deploy on Streamlit Community Cloud
 
@@ -88,7 +87,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Admin FRS camera capture and verification for a selected farmer
 - Admin account review, product moderation/removal, delivery-status, and COD collection controls
 - Product browsing, search, category and organic filters
-- Newly published farmer listings refresh in customer views automatically; hosted changes require successful writes to the configured private S3 snapshot
+- Newly published farmer listings refresh in customer views automatically; hosted changes require successful writes to the configured private Supabase Storage snapshot (or configured S3 fallback)
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
 - Working add-to-cart buttons with immediate cart-badge refresh, visible cart item summary, quantity management, address checkout, Cash on Delivery orders, a non-payment order reference, immediate cancellation for Placed/Confirmed/Preparing orders, and order history
 - Welcome message at sign-in and thank-you confirmation after completed purchases
@@ -99,7 +98,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Farmer listings include farm location, optional coordinates, crop details, and nearby-farm visibility for customers
 - Checkout captures the selected farmer/listing, location, distance, ETA estimate, and no-key Google Maps/OpenStreetMap route links
 - Admin inventory, gross order-value summaries (distinct from collected money), manually recorded COD collection, full order history, and fulfillment-status dashboard
-- Persistent listings, account, and order state backed by a private S3 snapshot in hosted deployments
+- Persistent listings, account, and order state backed by a private Supabase Storage bucket in hosted deployments
 - Multilingual crop/listing assistant (English, Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, and Marathi) with microphone transcription when optional support is installed and a text fallback
 - Top-level AI Voice Mode button with step-by-step microphone, language, transcription, and review instructions
 - AI voice assistance button on the login page for multilingual sign-in and registration guidance
@@ -108,11 +107,11 @@ Use the deployed Community Cloud address for access from any device at any time:
 
 New Customer and Farmer accounts are created only after SMTP email verification and a successful write to durable storage. There are no built-in test accounts or listings. Farmers publish their own real inventory; customer order history is scoped to the signed-in verified account.
 
-Farmer listings and uploaded images are stored in the configured private S3 snapshot. If hosted durable storage is unavailable, the app does not confirm new account, listing, or order writes as successful.
+Farmer listings and uploaded images are stored in the configured private Supabase Storage snapshot (or S3 fallback). If hosted durable storage is unavailable, the app does not confirm new account, listing, or order writes as successful.
 
 Farmers can add a farm/town location, optional latitude/longitude, and crop details to each listing. Customers see those details in the marketplace and select a listing as the purchase context at checkout. If both the farmer and customer provide coordinates, distance is calculated locally with the Haversine formula; otherwise customers can enter an approximate distance or continue without geolocation. ETA is clearly labeled as an estimate using a 20–30 minute baseline plus a small distance adjustment. Route links use Google Maps and OpenStreetMap directly and do not require API keys.
 
-Orders, including farmer/location/distance/ETA metadata, are included in the shared S3 snapshot. Distances and delivery-time values are estimates, not carrier dispatch or guaranteed delivery schedules.
+Orders, including farmer/location/distance/ETA metadata, are included in the shared durable snapshot. Distances and delivery-time values are estimates, not carrier dispatch or guaranteed delivery schedules.
 
 Checkout uses Cash on Delivery only. Each accepted order receives an order number and non-payment order reference, clears the cart, reserves stock, and appears in customer order history and Admin order reports. The reference is not a payment transaction, and the app does not claim to process or collect money. The farmer/operator must arrange actual delivery and confirm collection outside the app.
 
@@ -122,7 +121,7 @@ If a user forgets a password, select **Forgot password?** and complete the one-t
 
 Customers can cancel an order while it is Placed, Confirmed, or Preparing. Cancellation immediately marks the order as Cancelled, restores the reserved quantities to marketplace stock, records the cancellation time, and shows the confirmation in order history. Orders already Out for delivery or Delivered cannot be cancelled from the customer dashboard.
 
-Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. The local SQLite database supports development; hosted deployments require the configured S3 snapshot for durable, shared state.
+Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. The local SQLite database supports development; hosted deployments require the configured private Supabase Storage bucket or S3 snapshot for durable, shared state.
 
 Farmer registration requires a verified email and a clear FRS profile photo. Farmer and Admin accounts require password and camera face verification; face templates and verification captures are stored in the account snapshot. Customers use email/password only. Farmer and Admin sign-in remains blocked if face matching or durable storage is unavailable; there is no password-only fallback. The requirements file installs the prebuilt dlib runtime and matching face models on Windows and supported Linux Python versions. On Windows, install manually with:
 
@@ -136,7 +135,7 @@ If face matching is unavailable, farmer login is blocked with a clear setup mess
 
 Face-matching uses the prebuilt `dlib-bin` runtime and `face-recognition-models` on supported platforms; startup loads the native runtime only when a Farmer/Admin face action needs it. `st.audio_input` is used when provided by the installed Streamlit version. To transcribe recorded WAV audio, optionally install `SpeechRecognition` and provide the audio service it uses; otherwise use the transcript/text box. The listing assistant is a reviewable, lightweight field-prefill foundation, not a guarantee of translation or medical/agronomic advice.
 
-When `AGRI_S3_BUCKET` and AWS credentials are configured, the app restores and writes users, hashed passwords, listings, uploaded image bytes, orders, and verification dates at `agridirect/state.json`. Do not store production credentials in source control; configure them as Streamlit secrets or deployment environment variables.
+When `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are configured, the app creates the private `agridirect-private` bucket (or the bucket named by `SUPABASE_STORAGE_BUCKET`) if needed and restores/writes users, hashed passwords, listings, uploaded image bytes, orders, and verification dates at `state.json`. Alternatively, configure `AGRI_S3_BUCKET` and AWS credentials to use the S3 fallback. Do not store production credentials in source control; configure them as Streamlit secrets or deployment environment variables.
 
 ## Repository notes
 

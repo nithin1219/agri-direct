@@ -22,9 +22,10 @@ import ssl
 import sqlite3
 import time
 from email.utils import parseaddr
-from urllib.parse import quote_plus
+from urllib.parse import quote, quote_plus, urlsplit
 
 import pandas as pd
+import requests
 import streamlit as st
 
 try:
@@ -464,8 +465,141 @@ def hosted_streamlit_deployment():
 
 
 def durable_storage_configured():
+    if supabase_storage_config():
+        return ensure_supabase_bucket()
     bucket, _, _, _, _ = storage_config()
     return bool(bucket and boto3 is not None)
+
+
+class SupabaseStorageError(RuntimeError):
+    def __init__(self, message, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
+
+
+def supabase_storage_config():
+    values = {
+        "url": os.getenv("SUPABASE_URL"),
+        "key": os.getenv("SUPABASE_SERVICE_ROLE_KEY"),
+        "bucket": os.getenv("SUPABASE_STORAGE_BUCKET"),
+    }
+    try:
+        for key, secret_name in (
+            ("url", "SUPABASE_URL"),
+            ("key", "SUPABASE_SERVICE_ROLE_KEY"),
+            ("bucket", "SUPABASE_STORAGE_BUCKET"),
+        ):
+            values[key] = values[key] or st.secrets.get(secret_name)
+    except (FileNotFoundError, KeyError, AttributeError, TypeError):
+        pass
+    url = (values["url"] or "").strip().rstrip("/")
+    key = (values["key"] or "").strip()
+    bucket = (values["bucket"] or "agridirect-private").strip()
+    parsed_url = urlsplit(url)
+    if (
+        parsed_url.scheme != "https"
+        or not parsed_url.netloc
+        or parsed_url.path not in ("", "/")
+        or parsed_url.query
+        or parsed_url.fragment
+        or parsed_url.username
+        or parsed_url.password
+        or not key
+        or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{1,61}[a-z0-9]", bucket)
+    ):
+        return None
+    return {"url": url, "key": key, "bucket": bucket}
+
+
+def supabase_storage_request(
+    method, path, *, json_body=None, data=None, extra_headers=None
+):
+    config = supabase_storage_config()
+    if not config:
+        raise SupabaseStorageError("Supabase Storage is not configured.")
+    headers = {
+        "apikey": config["key"],
+        "Authorization": f"Bearer {config['key']}",
+    }
+    if json_body is not None:
+        headers["Content-Type"] = "application/json"
+    if extra_headers:
+        headers.update(extra_headers)
+    try:
+        response = requests.request(
+            method,
+            f"{config['url']}/storage/v1/{path.lstrip('/')}",
+            headers=headers,
+            json=json_body,
+            data=data,
+            timeout=(3, 5),
+            allow_redirects=False,
+        )
+    except requests.RequestException as exc:
+        raise SupabaseStorageError(
+            "Could not connect to Supabase Storage. Check the project URL and network."
+        ) from exc
+    if not 200 <= response.status_code < 300:
+        raise SupabaseStorageError(
+            f"Supabase Storage returned HTTP {response.status_code}. "
+            "Check the service-role secret and private bucket permissions.",
+            response.status_code,
+        )
+    return response
+
+
+def ensure_supabase_bucket():
+    config = supabase_storage_config()
+    if not config:
+        return False
+    ready_key = f"_supabase_bucket_ready:{config['url']}:{config['bucket']}"
+    if st.session_state.get(ready_key):
+        return True
+    encoded_bucket = quote(config["bucket"], safe="")
+    try:
+        try:
+            bucket_response = supabase_storage_request(
+                "GET", f"bucket/{encoded_bucket}"
+            )
+        except SupabaseStorageError as exc:
+            if exc.status_code != 404:
+                raise
+            try:
+                supabase_storage_request(
+                    "POST",
+                    "bucket",
+                    json_body={
+                        "id": config["bucket"],
+                        "name": config["bucket"],
+                        "public": False,
+                    },
+                )
+            except SupabaseStorageError as create_error:
+                if create_error.status_code != 409:
+                    raise
+            bucket_response = supabase_storage_request(
+                "GET", f"bucket/{encoded_bucket}"
+            )
+        try:
+            bucket_details = bucket_response.json()
+        except requests.JSONDecodeError as exc:
+            raise SupabaseStorageError(
+                "Supabase Storage returned invalid bucket metadata."
+            ) from exc
+        if not isinstance(bucket_details, dict):
+            raise SupabaseStorageError(
+                "Supabase Storage returned invalid bucket metadata."
+            )
+        if bucket_details.get("public") is not False:
+            raise SupabaseStorageError(
+                "Could not confirm the Supabase bucket is private. Set it to private before storing marketplace accounts or orders."
+            )
+    except SupabaseStorageError as exc:
+        st.session_state["storage_error"] = str(exc)
+        return False
+    st.session_state.pop("storage_error", None)
+    st.session_state[ready_key] = True
+    return True
 
 
 def load_persistent_snapshot():
@@ -530,7 +664,31 @@ def remove_legacy_demo_state(snapshot):
 
 
 def load_cloud_snapshot():
-    """Restore persisted marketplace state when a private S3 bucket is configured."""
+    """Restore marketplace state from configured Supabase Storage or S3."""
+    supabase_config = supabase_storage_config()
+    if supabase_config:
+        if not ensure_supabase_bucket():
+            return None
+        bucket = quote(supabase_config["bucket"], safe="")
+        try:
+            response = supabase_storage_request(
+                "GET", f"object/{bucket}/state.json"
+            )
+        except SupabaseStorageError as exc:
+            if exc.status_code == 404:
+                st.session_state.pop("storage_error", None)
+                return None
+            st.session_state["storage_error"] = str(exc)
+            return None
+        st.session_state.pop("storage_error", None)
+        try:
+            return response.json()
+        except requests.JSONDecodeError as exc:
+            st.session_state["storage_error"] = (
+                "Supabase Storage returned invalid marketplace JSON."
+            )
+            return None
+
     bucket, region, access_key, secret_key, session_token = storage_config()
     if not bucket or boto3 is None:
         st.session_state["cloud_snapshot_etag"] = None
@@ -693,7 +851,7 @@ def persist_login_face(user, image_bytes, enroll=False):
     if not snapshot_saved:
         user.update(previous)
         save_database_user(user)
-        return False, "Face enrollment could not be saved to durable shared storage. Configure the marketplace S3 bucket before signing in."
+        return False, "Face enrollment could not be saved to durable shared storage. Configure Supabase Storage or S3 before signing in."
     return True, "Face enrolled and saved." if enroll else "Face matched. Sign-in complete."
 
 
@@ -735,7 +893,7 @@ def storage_client(region, access_key, secret_key, session_token):
 
 
 def save_cloud_snapshot():
-    """Persist a complete snapshot locally and, when configured, to shared S3 storage."""
+    """Persist a complete snapshot locally and to the configured hosted object store."""
     payload = {
         "products": [{**product, "image_bytes": _encode_bytes(product.get("image_bytes"))} for product in st.session_state.products],
         "users": {
@@ -748,8 +906,30 @@ def save_cloud_snapshot():
         },
         "orders": st.session_state.orders,
     }
-    bucket, region, access_key, secret_key, session_token = storage_config()
     hosted = hosted_streamlit_deployment()
+    supabase_config = supabase_storage_config()
+    if supabase_config:
+        if not ensure_supabase_bucket():
+            return False
+        encoded_bucket = quote(supabase_config["bucket"], safe="")
+        try:
+            supabase_storage_request(
+                "POST",
+                f"object/{encoded_bucket}/state.json",
+                data=json.dumps(payload, default=str).encode(),
+                extra_headers={
+                    "Content-Type": "application/json",
+                    "x-upsert": "true",
+                },
+            )
+        except SupabaseStorageError as exc:
+            st.session_state["storage_error"] = str(exc)
+            return False
+        st.session_state.pop("storage_error", None)
+        save_local_snapshot(payload)
+        return True
+
+    bucket, region, access_key, secret_key, session_token = storage_config()
     if not bucket or boto3 is None:
         if hosted or bucket:
             return False
@@ -786,6 +966,19 @@ def clear_persisted_marketplace():
             connection.commit()
     except sqlite3.Error:
         pass
+    supabase_config = supabase_storage_config()
+    if supabase_config:
+        try:
+            encoded_bucket = quote(supabase_config["bucket"], safe="")
+            supabase_storage_request(
+                "DELETE",
+                f"object/{encoded_bucket}",
+                json_body={"prefixes": ["state.json"]},
+            )
+        except SupabaseStorageError as exc:
+            st.session_state["storage_error"] = str(exc)
+        return
+
     bucket, region, access_key, secret_key, session_token = storage_config()
     if bucket and boto3 is not None:
         try:
@@ -942,7 +1135,7 @@ def registration_view():
             if not valid:
                 st.error(message)
             elif hosted_streamlit_deployment() and not durable_storage_configured():
-                st.error("Account creation is paused until durable S3 storage is configured for this hosted marketplace.")
+                st.error("Account creation is paused until durable Supabase Storage or S3 is configured for this hosted marketplace.")
             else:
                 account = pending_registration["account"]
                 if not save_database_user(account):
@@ -1040,7 +1233,7 @@ def registration_view():
             if not email_transport_config():
                 st.error("Account registration requires verified-email delivery. Configure the SMTP settings in Streamlit secrets first.")
             elif hosted_streamlit_deployment() and not durable_storage_configured():
-                st.error("Account registration is paused until durable S3 storage is configured for this hosted marketplace.")
+                st.error("Account registration is paused until durable Supabase Storage or S3 is configured for this hosted marketplace.")
             elif not start_verification(normalized_email, "AgriDirect account verification", "registration"):
                 st.error("The verification email could not be sent. Check SMTP settings and try again.")
             else:
@@ -1128,10 +1321,15 @@ def authentication_view():
             "and password of at least 12 characters in Streamlit secrets before operating the marketplace."
         )
     if hosted_streamlit_deployment() and not durable_storage_configured():
-        st.error(
-            "Durable storage is not configured. Hosted account creation, face enrollment, and "
-            "marketplace changes are disabled until an S3 bucket and AWS credentials are configured."
-        )
+        storage_error = st.session_state.get("storage_error")
+        if storage_error:
+            st.error(f"Durable storage is unavailable: {storage_error}")
+        else:
+            st.error(
+                "Durable storage is not configured. Add SUPABASE_URL and "
+                "SUPABASE_SERVICE_ROLE_KEY to this app's Streamlit secrets. "
+                "The app will create the private agridirect-private Storage bucket automatically."
+            )
     st.session_state.setdefault("login_voice_mode", False)
     voice_left, voice_right = st.columns([4, 1])
     with voice_left:
@@ -2379,7 +2577,7 @@ def main():
         admin_view()
     st.sidebar.divider()
     st.sidebar.caption(
-        "Hosted marketplace changes require the configured durable S3 storage."
+        "Hosted marketplace changes require configured Supabase Storage or S3."
         if hosted_streamlit_deployment()
         else "Local development data persists in SQLite."
     )
