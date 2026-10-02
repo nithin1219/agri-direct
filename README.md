@@ -1,6 +1,6 @@
 # AgriDirect
 
-AgriDirect is a Streamlit marketplace for real farmer listings and customer orders. The Streamlit app is the supported runtime; it needs no Flask server or JavaScript build. It does not create demo accounts, pretend products, or sample orders. A production deployment must configure an administrator and durable storage before account registration and marketplace changes are enabled.
+AgriDirect is a Streamlit marketplace for real farmer listings and customer orders. The Streamlit app is the supported runtime; it needs no Flask server or JavaScript build. It does not create demo accounts, pretend products, or sample orders. The app can run with its local SQLite snapshot; configuring Supabase Storage or S3 is optional.
 
 ## Run locally
 
@@ -28,9 +28,9 @@ ipconfig
 
 Then open `http://<host-ip>:8501` from each phone, laptop, or desktop on the same Wi-Fi/LAN, replacing `<host-ip>` with the host computer's current private IPv4 address. Every device uses the same link, but each browser gets its own Streamlit session and login. If Windows Firewall asks, allow Python/Streamlit on the **Private networks** profile. Do not expose this development server directly to the public internet; use Streamlit Community Cloud or a properly secured reverse proxy for public access.
 
-### Required production configuration
+### Optional production configuration
 
-In Streamlit Community Cloud, open **App settings → Secrets** and configure a unique administrator account and Supabase Storage. SMTP settings are optional and are used only for password recovery. Never commit credentials:
+In Streamlit Community Cloud, open **App settings → Secrets** to configure a unique administrator account. To keep marketplace data across app restarts and share it across replicas, optionally configure Supabase Storage or S3 as described below. SMTP settings are only needed for password recovery. Never commit credentials:
 
 ```toml
 SUPABASE_URL = "https://your-project-ref.supabase.co"
@@ -52,7 +52,7 @@ from_address = "AgriDirect <noreply@your-domain.com>"
 
 Admin settings may alternatively be provided through the `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD` environment variables. The configured account becomes the only Admin; its password is stored as a PBKDF2 hash. There is deliberately no built-in or fallback admin password.
 
-The app provisions and verifies a private Supabase Storage bucket through the Storage REST API, then stores the complete marketplace snapshot as `state.json`. Configure `SUPABASE_URL` and a private server-side `SUPABASE_SERVICE_ROLE_KEY` in Streamlit secrets; a publishable/anon key cannot provision the private bucket or write the snapshot. Never expose the service-role key to browser code or commit it. S3 remains supported as a fallback when Supabase secrets are not configured; S3 snapshot writes use ETag preconditions, while concurrent Supabase snapshot updates use object upserts and should be limited to a single active writer for consistency. Hosted marketplace changes fail closed when the configured storage cannot be reached or written. Customer and Farmer accounts are created without email verification; optional SMTP configuration is used for password recovery. Admin passwords are managed through private deployment secrets.
+When configured, the app provisions and verifies a private Supabase Storage bucket through the Storage REST API, then stores the complete marketplace snapshot as `state.json`. Use a private server-side `SUPABASE_SERVICE_ROLE_KEY`; a publishable/anon key cannot provision the bucket or write the snapshot. Never expose the service-role key to browser code or commit it. S3 is also supported; S3 snapshot writes use ETag preconditions, while concurrent Supabase snapshot updates use object upserts and should be limited to a single active writer for consistency. Without either remote store, accounts, listings, and orders are saved in the app's local SQLite file. Streamlit Community Cloud's local filesystem is temporary and may not be shared across replicas, so this fallback can lose data after a restart or fail to synchronize across app instances. Customer and Farmer accounts are created without email verification; optional SMTP configuration is used for password recovery. Admin passwords are managed through private deployment secrets.
 
 ## Deploy on Streamlit Community Cloud
 
@@ -78,7 +78,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Customer, farmer, and admin workspace selection
 - Farmer Registration System (FRS) with username login, farmer registration, hashed passwords, and sign-out
 - Customer and Farmer accounts are created immediately without an email verification code
-- Password recovery requires a one-time email code and durable storage; Admin passwords are managed through deployment secrets
+- Password recovery requires a one-time email code and writable marketplace storage; Admin passwords are managed through deployment secrets
 - Farmer FRS profile photo enrollment and farmer-only profile details
 - Farmer and Admin accounts use password plus face verification: first successful password login enrolls and saves a camera face, and later logins require a face match; Customers sign in with their password only and do not enroll or store face data
 - Face verification is required at sign-in only; Farmer and Admin dashboards do not require an additional daily camera check
@@ -88,43 +88,43 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Admin account review, product moderation/removal, delivery-status, and COD collection controls
 - Admin-only Marketplace data tab with a consolidated view of accounts, listings, and orders; credentials and face templates are excluded
 - Product browsing, search, category and organic filters
-- Newly published farmer listings refresh in customer views automatically; hosted changes require successful writes to the configured private Supabase Storage snapshot (or configured S3 fallback)
+- Newly published farmer listings refresh in customer views automatically; changes use configured Supabase/S3 storage or fall back to local SQLite
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs
 - Working add-to-cart buttons with immediate cart-badge refresh, visible cart item summary, quantity management, address checkout, Cash on Delivery orders, a non-payment order reference, immediate cancellation for Placed/Confirmed/Preparing orders, and order history
 - Welcome message at sign-in and thank-you confirmation after completed purchases
 - Customer order history and fulfillment status
 - Live order notifications refresh every five seconds in Admin and Farmer dashboards; each farmer receives only the items belonging to their listings, with customer, quantity, delivery, payment, and status details
-- Complete order records are saved to durable hosted storage before checkout is confirmed and are shown with item-level farmer, quantity, and price details in Customer, Farmer, and Admin dashboards
+- Complete order records are saved before checkout is confirmed and are shown with item-level farmer, quantity, and price details in Customer, Farmer, and Admin dashboards
 - Farmer product creation and inventory view
 - Farmer listings include farm location, optional coordinates, crop details, and nearby-farm visibility for customers
 - Checkout captures the selected farmer/listing, location, distance, ETA estimate, and no-key Google Maps/OpenStreetMap route links
 - Admin inventory, gross order-value summaries (distinct from collected money), manually recorded COD collection, full order history, and fulfillment-status dashboard
-- Persistent listings, account, and order state backed by a private Supabase Storage bucket in hosted deployments
+- Listings, account, and order state backed by a private Supabase Storage bucket when configured, with SQLite fallback
 - Multilingual crop/listing assistant (English, Telugu, Hindi, Tamil, Kannada, Malayalam, Bengali, and Marathi) with microphone transcription when optional support is installed and a text fallback
 - Top-level AI Voice Mode button with step-by-step microphone, language, transcription, and review instructions
 - AI voice assistance button on the login page for multilingual sign-in and registration guidance
 - AI account assistant can fill spoken/transcribed email, username, and account type on login/registration; passwords always remain manual
 - Farm-and-plants visual theme on the public home screen
 
-New Customer and Farmer accounts are created immediately after valid form submission and a successful write to durable storage; ownership of the entered email address is not verified. There are no built-in test accounts or listings. Farmers publish their own real inventory; customer order history is scoped to the signed-in account.
+New Customer and Farmer accounts are created immediately after valid form submission and a successful write to marketplace storage; ownership of the entered email address is not verified. There are no built-in test accounts or listings. Farmers publish their own real inventory; customer order history is scoped to the signed-in account.
 
-Farmer listings and uploaded images are stored in the configured private Supabase Storage snapshot (or S3 fallback). If hosted durable storage is unavailable, the app does not confirm new account, listing, or order writes as successful.
+Farmer listings and uploaded images are stored in the configured private Supabase Storage snapshot (or S3 fallback). If no remote store is configured or reachable, the app saves to SQLite and labels that mode in the sidebar.
 
 Farmers can add a farm/town location, optional latitude/longitude, and crop details to each listing. Customers see those details in the marketplace and select a listing as the purchase context at checkout. If both the farmer and customer provide coordinates, distance is calculated locally with the Haversine formula; otherwise customers can enter an approximate distance or continue without geolocation. ETA is clearly labeled as an estimate using a 20–30 minute baseline plus a small distance adjustment. Route links use Google Maps and OpenStreetMap directly and do not require API keys.
 
-Orders, including farmer/location/distance/ETA metadata, are included in the shared durable snapshot. Distances and delivery-time values are estimates, not carrier dispatch or guaranteed delivery schedules.
+Orders, including farmer/location/distance/ETA metadata, are included in the marketplace snapshot. Distances and delivery-time values are estimates, not carrier dispatch or guaranteed delivery schedules.
 
 Checkout uses Cash on Delivery only. Each accepted order receives an order number and non-payment order reference, clears the cart, reserves stock, and appears in customer order history and Admin order reports. The reference is not a payment transaction, and the app does not claim to process or collect money. The farmer/operator must arrange actual delivery and confirm collection outside the app.
 
-Order placement is confirmed only after the complete order and updated inventory are saved to durable hosted storage; if the write fails, inventory and cart contents are restored and checkout reports an error. Each order preserves the customer, all ordered items, item-level farmer ownership, quantities and amounts, address, payment method, ETA, and status for customer history, per-farmer notifications, and Admin reports.
+Order placement is confirmed only after the complete order and updated inventory are saved to marketplace storage; if the write fails, inventory and cart contents are restored and checkout reports an error. Each order preserves the customer, all ordered items, item-level farmer ownership, quantities and amounts, address, payment method, ETA, and status for customer history, per-farmer notifications, and Admin reports.
 
-If a user forgets a password, select **Forgot password?** and complete the one-time code sent to the registered email address. SMTP delivery and durable storage must both be working. Admin passwords are changed through protected Streamlit deployment secrets, not the self-service flow.
+If a user forgets a password, select **Forgot password?** and complete the one-time code sent to the registered email address. SMTP delivery must be configured; Admin passwords are changed through protected Streamlit deployment secrets, not the self-service flow.
 
 Customers can cancel an order while it is Placed, Confirmed, or Preparing. Cancellation immediately marks the order as Cancelled, restores the reserved quantities to marketplace stock, records the cancellation time, and shows the confirmation in order history. Orders already Out for delivery or Delivered cannot be cancelled from the customer dashboard.
 
-Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. The local SQLite database supports development; hosted deployments require the configured private Supabase Storage bucket or S3 snapshot for durable, shared state.
+Customer orders are shown only to the signed-in customer, and farmer listings are shown only to the signed-in farmer. SQLite is the built-in local fallback. For persistent shared state across hosted restarts and replicas, configure the private Supabase Storage bucket or S3 snapshot.
 
-Farmer registration requires a syntactically valid email address and a clear FRS profile photo, but does not verify email ownership. Farmer and Admin accounts require password and camera face verification; face templates and verification captures are stored in the account snapshot. Customers use email/password only. Farmer and Admin sign-in remains blocked if face matching or durable storage is unavailable; there is no password-only fallback. The requirements file installs the prebuilt dlib runtime and matching face models on Windows and supported Linux Python versions. On Windows, install manually with:
+Farmer registration requires a syntactically valid email address and a clear FRS profile photo, but does not verify email ownership. Farmer and Admin accounts require password and camera face verification; face templates and verification captures are stored in the account snapshot. Customers use email/password only. Farmer and Admin sign-in remains blocked if face matching is unavailable; there is no password-only fallback. The requirements file installs the prebuilt dlib runtime and matching face models on Windows and supported Linux Python versions. On Windows, install manually with:
 
 ```powershell
 python -m pip install dlib-bin==20.0.1 face-recognition-models==0.3.0

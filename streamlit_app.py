@@ -251,7 +251,7 @@ def database_account_exists(email, username):
 
 
 def merge_persistent_users(users):
-    """Use shared snapshots as canonical whenever the app has configured storage."""
+    """Merge account rows from SQLite when no remote snapshot is configured."""
     for user in users.values():
         if user.get("role") == "Customer":
             user["face_encoding"] = None
@@ -260,7 +260,7 @@ def merge_persistent_users(users):
             if user.get("frs_photo_name") == "first-login-face-capture":
                 user["frs_photo"] = None
                 user["frs_photo_name"] = None
-    if hosted_streamlit_deployment() or storage_config()[0]:
+    if supabase_storage_config() or storage_config()[0]:
         return users
     database_users = load_database_users()
     for email, user in database_users.items():
@@ -269,7 +269,7 @@ def merge_persistent_users(users):
 
 
 def load_local_snapshot():
-    """Load marketplace data from the persistent SQLite store used by this deployment."""
+    """Load the app's SQLite snapshot for local or hosted fallback use."""
     try:
         initialize_database()
         with database_connection() as connection:
@@ -464,29 +464,6 @@ def hosted_streamlit_deployment():
     return host.endswith(".streamlit.app") or host.endswith(".streamlit.io")
 
 
-def durable_storage_configured():
-    if supabase_storage_config():
-        return ensure_supabase_bucket()
-    bucket, _, _, _, _ = storage_config()
-    return bool(bucket and boto3 is not None)
-
-
-def durable_storage_setup_message():
-    error = st.session_state.get("storage_error")
-    if error:
-        return (
-            f"Durable storage check failed: {error} "
-            "In Streamlit app settings, verify SUPABASE_URL and "
-            "SUPABASE_SERVICE_ROLE_KEY."
-        )
-    return (
-        "Hosted signup is paused because durable storage is not configured. "
-        "In Streamlit app settings → Secrets, add SUPABASE_URL and "
-        "SUPABASE_SERVICE_ROLE_KEY (a private server-side key, not a publishable key). "
-        "The app creates its private Supabase Storage bucket automatically."
-    )
-
-
 class SupabaseStorageError(RuntimeError):
     def __init__(self, message, status_code=None):
         super().__init__(message)
@@ -620,9 +597,10 @@ def ensure_supabase_bucket():
 
 def load_persistent_snapshot():
     snapshot = load_cloud_snapshot()
-    if snapshot is not None or hosted_streamlit_deployment() or storage_config()[0]:
+    if snapshot is not None and not st.session_state.get("storage_error"):
         return snapshot
-    return load_local_snapshot()
+    local_snapshot = load_local_snapshot()
+    return local_snapshot if local_snapshot is not None else snapshot
 
 
 def _encode_bytes(value):
@@ -909,7 +887,7 @@ def storage_client(region, access_key, secret_key, session_token):
 
 
 def save_cloud_snapshot():
-    """Persist a complete snapshot locally and to the configured hosted object store."""
+    """Persist a snapshot remotely when configured, otherwise use the SQLite fallback."""
     payload = {
         "products": [{**product, "image_bytes": _encode_bytes(product.get("image_bytes"))} for product in st.session_state.products],
         "users": {
@@ -922,11 +900,11 @@ def save_cloud_snapshot():
         },
         "orders": st.session_state.orders,
     }
-    hosted = hosted_streamlit_deployment()
     supabase_config = supabase_storage_config()
     if supabase_config:
         if not ensure_supabase_bucket():
-            return False
+            st.session_state["snapshot_storage_mode"] = "Local SQLite fallback"
+            return save_local_snapshot(payload)
         encoded_bucket = quote(supabase_config["bucket"], safe="")
         try:
             supabase_storage_request(
@@ -940,15 +918,16 @@ def save_cloud_snapshot():
             )
         except SupabaseStorageError as exc:
             st.session_state["storage_error"] = str(exc)
-            return False
+            st.session_state["snapshot_storage_mode"] = "Local SQLite fallback"
+            return save_local_snapshot(payload)
         st.session_state.pop("storage_error", None)
+        st.session_state["snapshot_storage_mode"] = "Supabase Storage"
         save_local_snapshot(payload)
         return True
 
     bucket, region, access_key, secret_key, session_token = storage_config()
     if not bucket or boto3 is None:
-        if hosted or bucket:
-            return False
+        st.session_state["snapshot_storage_mode"] = "Local SQLite"
         return save_local_snapshot(payload)
     try:
         expected_etag = st.session_state.get("cloud_snapshot_etag")
@@ -966,10 +945,10 @@ def save_cloud_snapshot():
             **conditional_write,
         )
     except (BotoCoreError, ClientError, OSError, ValueError):
-        if hosted or bucket:
-            return False
+        st.session_state["snapshot_storage_mode"] = "Local SQLite fallback"
         return save_local_snapshot(payload)
     st.session_state["cloud_snapshot_etag"] = response.get("ETag")
+    st.session_state["snapshot_storage_mode"] = "S3"
     save_local_snapshot(payload)
     return True
 
@@ -1207,20 +1186,19 @@ def registration_view():
                 "frs_photo_name": farmer_photo.name if farmer_photo else None,
                 "face_encoding": enrolled_encoding,
             }
-            if hosted_streamlit_deployment() and not durable_storage_configured():
-                st.error(durable_storage_setup_message())
-            elif not save_database_user(account):
+            if not save_database_user(account):
                 st.error("Your account could not be saved. Check the database location and try again.")
             else:
                 st.session_state.users[normalized_email] = account
                 if not save_cloud_snapshot():
                     st.session_state.users.pop(normalized_email, None)
                     delete_database_user(normalized_email)
-                    st.error("Account creation failed because durable marketplace storage is unavailable. No account was created.")
+                    st.error("Account creation failed because marketplace data could not be saved.")
                 else:
                     st.session_state.pop("show_create_account", None)
                     continue_after_password(account)
-                    st.success("Account created. Email verification is not required.")
+                    storage_mode = st.session_state.get("snapshot_storage_mode", "marketplace storage")
+                    st.success(f"Account created and signed in. Saved using {storage_mode}.")
                     st.rerun()
     if st.button("Back to sign in", key="back-to-signin"):
         st.session_state.pop("show_create_account", None)
@@ -1250,8 +1228,6 @@ def password_reset_view():
                 st.error("Password must be at least 12 characters.")
             elif new_password != confirm_password:
                 st.error("Passwords do not match.")
-            elif hosted_streamlit_deployment() and not durable_storage_configured():
-                st.error("Password reset is unavailable until durable storage is configured.")
             else:
                 previous_password = user["password"]
                 user["password"] = password_hash(new_password)
@@ -1262,7 +1238,7 @@ def password_reset_view():
                 else:
                     user["password"] = previous_password
                     save_database_user(user)
-                    st.error("The password could not be saved to durable storage.")
+                    st.error("The password could not be saved to marketplace storage.")
         if st.button("Resend password code", key="resend-password-code"):
             if start_verification(email, "AgriDirect password reset", "password_reset"):
                 st.success("A new verification code was sent.")
@@ -1859,7 +1835,7 @@ def place_order(address, city, pincode, total, context_product, distance_km, eta
         for product, quantity in purchased_rows:
             product["stock"] += quantity
         st.session_state.cart.update(previous_cart)
-        st.error("The order could not be saved to the database. No purchase was completed; please try again.")
+        st.error("The order could not be saved to marketplace storage. No purchase was completed; please try again.")
         return
     st.success(f"Purchase completed successfully! Order #{order['id']} was created.")
     st.info(
@@ -2047,7 +2023,7 @@ def render_orders():
                         st.success(f"Your order #{order['id']} was cancelled immediately.")
                         st.rerun()
                     else:
-                        st.error("Cancellation was not saved to durable storage. Your order and stock were left unchanged.")
+                        st.error("Cancellation was not saved to marketplace storage. Your order and stock were left unchanged.")
 
 
 def farmer_view():
@@ -2139,12 +2115,13 @@ def farmer_view():
                 })
                 st.session_state.next_product_id += 1
                 if save_cloud_snapshot():
-                    st.success("Your product is saved permanently and is now live in every customer marketplace.")
+                    storage_mode = st.session_state.get("snapshot_storage_mode", "marketplace storage")
+                    st.success(f"Your product is saved using {storage_mode} and is now live in this marketplace.")
                     st.rerun()
                 else:
                     st.session_state.products.pop()
                     st.session_state.next_product_id -= 1
-                    st.error("The listing could not be saved to the database. Your product was not published; try again.")
+                    st.error("The listing could not be saved to marketplace storage. Your product was not published; try again.")
     st.subheader("Your listings")
     if mine:
         st.dataframe(pd.DataFrame(mine)[["name", "category", "price", "unit", "stock", "organic"]], use_container_width=True, hide_index=True)
@@ -2511,7 +2488,7 @@ def admin_view():
             st.session_state.products.append(removed_product)
             if previous_cart_quantity is not None:
                 st.session_state.cart[selected_product] = previous_cart_quantity
-            st.error("The product could not be removed from durable storage.")
+            st.error("The product could not be removed from marketplace storage.")
     if st.session_state.orders:
         st.subheader("Recent orders")
         order_data = [
@@ -2541,7 +2518,7 @@ def admin_view():
                     st.success(f"Order #{selected} updated to {new_status}.")
                 else:
                     selected_order["status"] = old_status
-                    st.error("The order update could not be saved to durable storage.")
+                    st.error("The order update could not be saved to marketplace storage.")
         selected_order = next(order for order in st.session_state.orders if order["id"] == selected)
         if selected_order["status"] == "Delivered" and selected_order.get("payment_status") != "Collected":
             st.warning("Only record this after the farmer/operator confirms the COD cash was received.")
@@ -2558,7 +2535,7 @@ def admin_view():
                         selected_order.pop("collected_at", None)
                     else:
                         selected_order["collected_at"] = previous_collected_at
-                    st.error("COD collection could not be recorded in durable storage.")
+                    st.error("COD collection could not be recorded in marketplace storage.")
 
 
 def main():
@@ -2604,11 +2581,18 @@ def main():
     else:
         admin_view()
     st.sidebar.divider()
-    st.sidebar.caption(
-        "Hosted marketplace changes require configured Supabase Storage or S3."
-        if hosted_streamlit_deployment()
-        else "Local development data persists in SQLite."
+    storage_mode = st.session_state.get(
+        "snapshot_storage_mode",
+        "Local SQLite" if not supabase_storage_config() and not storage_config()[0] else "Marketplace storage",
     )
+    if storage_mode == "Supabase Storage" or storage_mode == "S3":
+        st.sidebar.caption(f"Shared storage: {storage_mode}.")
+    elif hosted_streamlit_deployment():
+        st.sidebar.warning(
+            f"Using {storage_mode}. Hosted local data may be lost on restart and may not sync across app replicas."
+        )
+    else:
+        st.sidebar.caption(f"Local development data: {storage_mode}.")
     if st.sidebar.button("Sign out", use_container_width=True):
         st.session_state.authenticated_user = None
         st.rerun()
