@@ -1320,16 +1320,6 @@ def authentication_view():
             "Administrator setup is incomplete. Configure a unique admin email, username, "
             "and password of at least 12 characters in Streamlit secrets before operating the marketplace."
         )
-    if hosted_streamlit_deployment() and not durable_storage_configured():
-        storage_error = st.session_state.get("storage_error")
-        if storage_error:
-            st.error(f"Durable storage is unavailable: {storage_error}")
-        else:
-            st.error(
-                "Durable storage is not configured. Add SUPABASE_URL and "
-                "SUPABASE_SERVICE_ROLE_KEY to this app's Streamlit secrets. "
-                "The app will create the private agridirect-private Storage bucket automatically."
-            )
     st.session_state.setdefault("login_voice_mode", False)
     voice_left, voice_right = st.columns([4, 1])
     with voice_left:
