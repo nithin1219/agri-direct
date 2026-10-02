@@ -471,6 +471,22 @@ def durable_storage_configured():
     return bool(bucket and boto3 is not None)
 
 
+def durable_storage_setup_message():
+    error = st.session_state.get("storage_error")
+    if error:
+        return (
+            f"Durable storage check failed: {error} "
+            "In Streamlit app settings, verify SUPABASE_URL and "
+            "SUPABASE_SERVICE_ROLE_KEY. No SQL setup is required."
+        )
+    return (
+        "Hosted signup is paused because durable storage is not configured. "
+        "In Streamlit app settings → Secrets, add SUPABASE_URL and "
+        "SUPABASE_SERVICE_ROLE_KEY (a private server-side key, not a publishable key). "
+        "The app creates its private Supabase Storage bucket automatically; no SQL setup is required."
+    )
+
+
 class SupabaseStorageError(RuntimeError):
     def __init__(self, message, status_code=None):
         super().__init__(message)
@@ -1192,7 +1208,7 @@ def registration_view():
                 "face_encoding": enrolled_encoding,
             }
             if hosted_streamlit_deployment() and not durable_storage_configured():
-                st.error("Account registration is paused until durable Supabase Storage or S3 is configured for this hosted marketplace.")
+                st.error(durable_storage_setup_message())
             elif not save_database_user(account):
                 st.error("Your account could not be saved. Check the database location and try again.")
             else:
