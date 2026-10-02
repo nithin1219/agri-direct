@@ -30,18 +30,15 @@ import streamlit as st
 try:
     import boto3
     from botocore.exceptions import BotoCoreError, ClientError
+    from botocore.config import Config as BotoConfig
 except ImportError:
     boto3 = None
     BotoCoreError = ClientError = OSError
+    BotoConfig = None
 
-try:
-    import face_recognition
-except ImportError:
-    face_recognition = None
-try:
-    import numpy as np
-except ImportError:
-    np = None
+face_recognition = None
+np = None
+_face_runtime_loaded = False
 
 try:
     import speech_recognition as speech_recognition
@@ -607,7 +604,7 @@ def normalize_order(order, index):
 
 
 def face_encoding(image_bytes):
-    if face_recognition is None:
+    if not load_face_runtime():
         return None
     try:
         image = face_recognition.load_image_file(io.BytesIO(image_bytes))
@@ -617,8 +614,27 @@ def face_encoding(image_bytes):
         return None
 
 
+def load_face_runtime():
+    global face_recognition, np, _face_runtime_loaded
+    if face_recognition is not None and np is not None:
+        return True
+    if _face_runtime_loaded:
+        return False
+    _face_runtime_loaded = True
+    try:
+        import face_recognition as face_runtime
+        import numpy as numpy_runtime
+    except (ImportError, OSError):
+        face_recognition = None
+        np = None
+        return False
+    face_recognition = face_runtime
+    np = numpy_runtime
+    return True
+
+
 def verify_face(image_bytes, reference):
-    if face_recognition is None or np is None or not reference:
+    if not load_face_runtime() or not reference:
         return False
     try:
         candidate = face_encoding(image_bytes)
@@ -628,7 +644,7 @@ def verify_face(image_bytes, reference):
 
 
 def persist_login_face(user, image_bytes, enroll=False):
-    if face_recognition is None or np is None:
+    if not load_face_runtime():
         return False, "Face matching is unavailable. Login is blocked until the FRS runtime is installed."
     if enroll:
         encoding = face_encoding(image_bytes)
@@ -679,12 +695,20 @@ def storage_config():
 def storage_client(region, access_key, secret_key, session_token):
     if boto3 is None:
         return None
+    client_options = {}
+    if BotoConfig is not None:
+        client_options["config"] = BotoConfig(
+            connect_timeout=3,
+            read_timeout=5,
+            retries={"max_attempts": 2, "mode": "standard"},
+        )
     return boto3.client(
         "s3",
         region_name=region,
         aws_access_key_id=access_key or None,
         aws_secret_access_key=secret_key or None,
         aws_session_token=session_token or None,
+        **client_options,
     )
 
 
@@ -791,6 +815,8 @@ def sync_cloud_snapshot():
 
 def seed_state():
     """Create a fresh in-memory marketplace for the current browser session."""
+    if st.session_state.get("_marketplace_initialized"):
+        return False
     snapshot = load_persistent_snapshot()
     snapshot, migrated_legacy_data = remove_legacy_demo_state(snapshot)
     if "products" not in st.session_state:
@@ -873,8 +899,10 @@ def seed_state():
         st.session_state.authenticated_user = None
         st.session_state.pop("pending_face_login", None)
     st.session_state.setdefault("authenticated_user", None)
-    if not snapshot or migrated_legacy_data or migrated_session_data:
+    if migrated_legacy_data or migrated_session_data:
         save_cloud_snapshot()
+    st.session_state["_marketplace_initialized"] = True
+    return True
 
 
 def registration_view():
@@ -977,7 +1005,7 @@ def registration_view():
             st.error("Farmer registration requires an FRS profile photo.")
         else:
             enrolled_encoding = face_encoding(farmer_photo.getvalue()) if farmer_photo and account_role == "Farmer" else None
-            if account_role == "Farmer" and face_recognition is not None and not enrolled_encoding:
+            if account_role == "Farmer" and load_face_runtime() and not enrolled_encoding:
                 st.error("No clear face was found in that photo. Upload one clear, front-facing farmer photo.")
                 return
             account = {
@@ -1152,7 +1180,7 @@ def authentication_view():
             st.info("Password accepted. Capture your face once to securely enroll it; later logins must match this face.")
         else:
             st.info("Password accepted. Capture the saved account face to finish signing in.")
-        if face_recognition is None or np is None:
+        if not load_face_runtime():
             st.error("Face matching is unavailable on this deployment. Login is blocked until the native face-recognition runtime is installed.")
             if st.button("Cancel face verification", key="cancel-face-login"):
                 st.session_state.pop("pending_face_login", None)
@@ -1480,11 +1508,11 @@ def customer_view():
         render_orders()
 
 
-@streamlit_fragment(run_every="1s")
+@streamlit_fragment(run_every="5s")
 def marketplace_browser():
-    """Refresh shared listings every second without interrupting cart or checkout."""
+    """Refresh shared listings every five seconds without interrupting cart or checkout."""
     synced = sync_cloud_snapshot()
-    st.caption("Marketplace listings update automatically every second.")
+    st.caption("Marketplace listings update automatically every five seconds.")
     if st.button("Refresh marketplace now", key="refresh-marketplace"):
         if synced or sync_cloud_snapshot():
             st.success("Latest farmer listings are now visible.")
@@ -2158,7 +2186,7 @@ def admin_view():
             key="admin-frs-camera",
         )
         if admin_camera_photo:
-            if face_recognition is None:
+            if not load_face_runtime():
                 st.warning("Face matching is not installed in this deployment. Install the optional face-recognition package to verify camera captures.")
             elif not selected_profile.get("face_encoding"):
                 st.error("This farmer has no enrolled face profile. Register the farmer with an FRS photo first.")
@@ -2286,7 +2314,7 @@ def admin_view():
 
 
 def main():
-    seed_state()
+    initialized_session = seed_state()
     st.markdown(
         f"""<style>
         .stApp {{
@@ -2299,7 +2327,8 @@ def main():
         unsafe_allow_html=True,
     )
     if not st.session_state.authenticated_user:
-        sync_cloud_snapshot()
+        if not initialized_session:
+            sync_cloud_snapshot()
         authentication_view()
         return
     st.sidebar.title("AgriDirect")
@@ -2307,7 +2336,8 @@ def main():
     user = st.session_state.users[st.session_state.authenticated_user]
     # Load the latest shared users, listings, and orders before rendering any
     # authenticated dashboard, including newly registered customer sessions.
-    sync_cloud_snapshot()
+    if not initialized_session:
+        sync_cloud_snapshot()
     user = st.session_state.users.get(st.session_state.authenticated_user)
     if not user:
         st.session_state.authenticated_user = None
