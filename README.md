@@ -86,6 +86,7 @@ Use the deployed Community Cloud address for access from any device at any time:
 - Admin-only farmer FRS verification status
 - Admin FRS camera capture and verification for a selected farmer
 - Admin account review, product moderation/removal, delivery-status, and COD collection controls
+- Admin-only Marketplace data tab with a consolidated view of accounts, listings, and orders; credentials and face templates are excluded
 - Product browsing, search, category and organic filters
 - Newly published farmer listings refresh in customer views automatically; hosted changes require successful writes to the configured private Supabase Storage snapshot (or configured S3 fallback)
 - Farmer product image uploads for JPG, JPEG, PNG, WEBP, GIF, BMP, TIF, and TIFF, plus public image URLs

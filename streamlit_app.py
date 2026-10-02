@@ -2195,7 +2195,9 @@ def admin_view():
         "Order value is not payment; COD collection must be confirmed by an operator."
     )
     admin_order_notifications()
-    report_tabs = st.tabs(["Daily order value", "Order summary", "Full order history"])
+    report_tabs = st.tabs(
+        ["Daily order value", "Order summary", "Full order history", "Marketplace data"]
+    )
     with report_tabs[0]:
         st.metric("Today's order value", money(daily_order_value), help="Non-cancelled COD order value placed today, not money received.")
         st.dataframe(
@@ -2236,6 +2238,63 @@ def admin_view():
             for order in st.session_state.orders
         ]
         st.dataframe(pd.DataFrame(history), use_container_width=True, hide_index=True)
+    with report_tabs[3]:
+        st.caption(
+            "Central admin view of marketplace records. Records remain in the configured "
+            "private durable snapshot so customer and farmer sessions share the same data. "
+            "Passwords and face templates are never displayed here."
+        )
+        st.subheader("Accounts")
+        account_rows = [
+            {
+                "Username": f"@{user['username']}",
+                "Email": user["email"],
+                "Role": user["role"],
+                "FRS photo": "Saved" if user.get("frs_photo") else "Not required",
+                "Face enrolled": "Yes" if user.get("face_encoding") else "No",
+            }
+            for user in st.session_state.users.values()
+        ]
+        st.dataframe(
+            pd.DataFrame(account_rows),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.subheader("Listings and inventory")
+        inventory_columns = [
+            "id", "name", "category", "farmer", "farmer_id", "farmer_location",
+            "crop_details", "price", "unit", "stock", "organic", "image_url",
+        ]
+        st.dataframe(
+            pd.DataFrame(st.session_state.products).reindex(columns=inventory_columns),
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.subheader("Orders")
+        all_orders = [
+            {
+                "Order": order["id"],
+                "Order reference": order.get("order_reference", "Not recorded"),
+                "Date": order["created"],
+                "Customer": order.get("owner_email", "—"),
+                "Items": " | ".join(
+                    f"{item.get('name', 'Product')} × {item.get('quantity', 0)} "
+                    f"({item.get('farmer', order.get('farmer', '—'))}; "
+                    f"{money(float(item.get('total', 0)))})"
+                    for item in order.get("items", [])
+                ) or order.get("listing", "—"),
+                "Total": money(order["total"]),
+                "Status": order["status"],
+                "Payment status": order.get("payment_status", "—"),
+                "Delivery": order["address"],
+            }
+            for order in st.session_state.orders
+        ]
+        st.dataframe(
+            pd.DataFrame(all_orders),
+            use_container_width=True,
+            hide_index=True,
+        )
     st.subheader("Visual reports")
     delivered_value = sum(
         order["total"] for order in st.session_state.orders
