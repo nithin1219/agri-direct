@@ -64,13 +64,13 @@ Customer and Farmer registration requires a working SMTP account: a one-time ema
 
 If Farmer/Admin sign-in reports that face matching is unavailable after deployment, confirm that the deployed branch includes both dependency files, then use **Manage app → Reboot** after the package installation finishes. Do not bypass face verification: Farmer/Admin sign-in remains blocked until the face-matching runtime is available.
 
-The public Community Cloud address is `https://agri-direct-nithin-dairy.streamlit.app/`. In **App settings**, set viewer access to the intended audience. A healthy `/healthz` endpoint does not verify app access or deployment success; check the app page and Streamlit Cloud logs after each deployment.
+The public Community Cloud address is `https://agri-direct-nithin-1.streamlit.app/`. In **App settings**, set viewer access to the intended audience. A healthy `/healthz` endpoint does not verify app access or deployment success; check the app page and Streamlit Cloud logs after each deployment.
 
 ### Always-on access
 
 Use the deployed Community Cloud address for access from any device at any time:
 
-`https://agri-direct-nithin-dairy.streamlit.app/`
+`https://agri-direct-nithin-1.streamlit.app/`
 
 `localhost` and private IP links are not public hosting. They work only while the host computer is powered on, connected to the network, and running Streamlit; they cannot provide guaranteed 24/7 access after the computer sleeps, shuts down, loses its network connection, or closes the Streamlit process. For a permanent custom domain or guaranteed uptime, deploy the same app on an always-on server or managed hosting service.
 
