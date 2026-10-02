@@ -1122,46 +1122,7 @@ def seed_state():
 
 def registration_view():
     st.subheader("Create your AgriDirect account")
-    st.caption("Complete the form once. Your account is saved for future sign-ins.")
-    pending_registration = st.session_state.get("pending_registration")
-    if pending_registration:
-        email = pending_registration["email"]
-        st.info(f"Enter the verification code sent to {email} to activate the account.")
-        with st.form("registration-email-verification-form"):
-            code = st.text_input("Email verification code", max_chars=6)
-            verify = st.form_submit_button("Verify email and create account", type="primary")
-        if verify:
-            valid, message = check_verification(email, "registration", code)
-            if not valid:
-                st.error(message)
-            elif hosted_streamlit_deployment() and not durable_storage_configured():
-                st.error("Account creation is paused until durable Supabase Storage or S3 is configured for this hosted marketplace.")
-            else:
-                account = pending_registration["account"]
-                if not save_database_user(account):
-                    st.error("Your account could not be saved. Check the database location and try again.")
-                else:
-                    st.session_state.users[account["email"]] = account
-                    if not save_cloud_snapshot():
-                        st.session_state.users.pop(account["email"], None)
-                        delete_database_user(account["email"])
-                        st.error("Account creation failed because durable marketplace storage is unavailable. No account was created.")
-                    else:
-                        st.session_state.pop("pending_registration", None)
-                        st.session_state.pop("show_create_account", None)
-                        continue_after_password(account)
-                        st.success("Email verified and account created.")
-                        st.rerun()
-        if st.button("Resend verification code", key="resend-registration-code"):
-            if start_verification(email, "AgriDirect account verification", "registration"):
-                st.success("A new verification code was sent.")
-            else:
-                st.error("Email delivery is unavailable. Check the SMTP settings in Streamlit secrets.")
-        if st.button("Cancel account creation", key="cancel-pending-registration"):
-            st.session_state.pop("pending_registration", None)
-            st.session_state.pop("pending_email_verification", None)
-            st.rerun()
-        return
+    st.caption("Create an account and sign in immediately. Email verification is not required.")
     st.markdown("#### 🎙️ AI account assistant")
     st.caption("Speak or type your email, username, and account type. The assistant fills those fields; enter your password manually.")
     registration_language = st.selectbox("Assistant language", list(ASSISTANT_LANGUAGES), key="registration-assistant-language")
@@ -1230,19 +1191,21 @@ def registration_view():
                 "frs_photo_name": farmer_photo.name if farmer_photo else None,
                 "face_encoding": enrolled_encoding,
             }
-            if not email_transport_config():
-                st.error("Account registration requires verified-email delivery. Configure the SMTP settings in Streamlit secrets first.")
-            elif hosted_streamlit_deployment() and not durable_storage_configured():
+            if hosted_streamlit_deployment() and not durable_storage_configured():
                 st.error("Account registration is paused until durable Supabase Storage or S3 is configured for this hosted marketplace.")
-            elif not start_verification(normalized_email, "AgriDirect account verification", "registration"):
-                st.error("The verification email could not be sent. Check SMTP settings and try again.")
+            elif not save_database_user(account):
+                st.error("Your account could not be saved. Check the database location and try again.")
             else:
-                st.session_state.pending_registration = {
-                    "email": normalized_email,
-                    "account": account,
-                }
-                st.success("A verification code was sent to your email. Enter it to create the account.")
-                st.rerun()
+                st.session_state.users[normalized_email] = account
+                if not save_cloud_snapshot():
+                    st.session_state.users.pop(normalized_email, None)
+                    delete_database_user(normalized_email)
+                    st.error("Account creation failed because durable marketplace storage is unavailable. No account was created.")
+                else:
+                    st.session_state.pop("show_create_account", None)
+                    continue_after_password(account)
+                    st.success("Account created. Email verification is not required.")
+                    st.rerun()
     if st.button("Back to sign in", key="back-to-signin"):
         st.session_state.pop("show_create_account", None)
         st.rerun()
@@ -1441,8 +1404,8 @@ def authentication_view():
             st.session_state["show_password_reset"] = True
             st.rerun()
     with register_tab:
-        st.write("New accounts require email verification before access is granted.")
-        if st.button("Start verified registration", key="start-verified-registration"):
+        st.write("Create a new account without an email verification step.")
+        if st.button("Start registration", key="start-registration"):
             st.session_state["show_create_account"] = True
             st.rerun()
 
