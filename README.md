@@ -38,8 +38,8 @@ SUPABASE_SERVICE_ROLE_KEY = "your-private-service-role-key"
 SUPABASE_STORAGE_BUCKET = "agridirect-private"
 
 [admin]
-email = "admin@your-domain.com"
-username = "your-admin-username"
+email = "nithintiru123204@gmail.com"
+username = "nani"
 password = "replace-with-a-unique-password-of-at-least-12-characters"
 
 [email]
@@ -50,7 +50,7 @@ password = "smtp-app-password"
 from_address = "AgriDirect <noreply@your-domain.com>"
 ```
 
-Admin settings may alternatively be provided through the `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD` environment variables. The configured account becomes the only Admin; its password is stored as a PBKDF2 hash. There is deliberately no built-in or fallback admin password.
+The default Admin identity is `nithintiru123204@gmail.com` (`nani`). Set a unique password of at least 12 characters in Streamlit secrets before signing in. Admin settings may alternatively be provided through the `ADMIN_EMAIL`, `ADMIN_USERNAME`, and `ADMIN_PASSWORD` environment variables. The configured account becomes the only Admin; its password is stored as a PBKDF2 hash. There is deliberately no built-in or fallback admin password.
 
 When configured, the app provisions and verifies a private Supabase Storage bucket through the Storage REST API, then stores the complete marketplace snapshot as `state.json`. Use a private server-side `SUPABASE_SERVICE_ROLE_KEY`; a publishable/anon key cannot provision the bucket or write the snapshot. Never expose the service-role key to browser code or commit it. S3 is also supported; S3 snapshot writes use ETag preconditions, while concurrent Supabase snapshot updates use object upserts and should be limited to a single active writer for consistency. Without either remote store, accounts, listings, and orders are saved in the app's local SQLite file. Streamlit Community Cloud's local filesystem is temporary and may not be shared across replicas, so this fallback can lose data after a restart or fail to synchronize across app instances. Customer and Farmer accounts are created without email verification; optional SMTP configuration is used for password recovery. Admin passwords are managed through private deployment secrets.
 

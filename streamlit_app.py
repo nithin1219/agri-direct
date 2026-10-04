@@ -341,8 +341,8 @@ def continue_after_password(user):
 
 def configured_admin_account():
     values = {
-        "email": os.getenv("ADMIN_EMAIL"),
-        "username": os.getenv("ADMIN_USERNAME"),
+        "email": os.getenv("ADMIN_EMAIL") or "nithintiru123204@gmail.com",
+        "username": os.getenv("ADMIN_USERNAME") or "nani",
         "password": os.getenv("ADMIN_PASSWORD"),
     }
     try:
